@@ -33,7 +33,7 @@ DEPLOY_MODE ?= snapshot
 EXTRA_VARS  ?=
 INFRA_DIR    = infra/$(INFRA)
 
-.PHONY: e2e deploy-infra deploy-osac setup-suite run-tests \
+.PHONY: e2e setup-infra deploy-infra deploy-osac setup-suite run-tests \
         destroy-osac destroy-infra gather-infra redeploy-osac \
         _validate-backend _validate-suite-contract
 
@@ -65,7 +65,10 @@ _validate-suite-contract:
 		fi; \
 	fi
 
-e2e: _validate-backend deploy-infra deploy-osac setup-suite run-tests
+e2e: _validate-backend setup-infra deploy-infra deploy-osac setup-suite run-tests
+
+setup-infra: _validate-backend
+	$(MAKE) -C $(INFRA_DIR) -f contract.mk setup-infra EXTRA_VARS='$(EXTRA_VARS)'
 
 deploy-infra: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) -f contract.mk deploy-infra DEPLOY_MODE=$(DEPLOY_MODE) EXTRA_VARS='$(EXTRA_VARS)'

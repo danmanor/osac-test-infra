@@ -11,7 +11,8 @@ Each backend lives in `infra/<name>/` and must provide:
 
 | Target | Purpose |
 |---|---|
-| `deploy-infra` | Provision the base cluster |
+| `setup-infra` | Install prerequisites and dependencies |
+| `deploy-infra` | Provision the lab and cluster |
 | `deploy-osac` | Deploy OSAC, write `.env.cluster` |
 | `setup-<suite>` | Suite-specific infra prep (can be no-op) |
 | `destroy-osac` | Tear down OSAC only |
