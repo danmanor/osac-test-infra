@@ -50,6 +50,33 @@ Not every backend supports every test suite. Each backend declares its supported
 
 Running an unsupported combination (e.g., `make e2e INFRA=netris SUITE=storage`) fails immediately with a clear error message — no time wasted on provisioning.
 
+### Backend Setup: Netris
+
+The Netris backend requires the following files placed in `infra/netris/` before running:
+
+| File | Description | How to obtain |
+|------|-------------|---------------|
+| `license.key` | Netris controller license | Obtain from Netris |
+| `license.zip` | OSAC/AAP license (base64-encoded zip) | Obtain from Red Hat |
+| `config` | INI file with lab name and AWS credentials | Create manually (see below) |
+
+The `config` file format:
+
+```ini
+[default]
+lab_name = <unique-name>
+aws_access_key_id = <your-key>
+aws_secret_access_key = <your-secret>
+aws_region = us-east-1
+```
+
+- `lab_name` — unique identifier for your lab to avoid DNS collisions in Route 53
+- AWS credentials — used for Route 53 DNS record management
+
+Additionally, an OCP pull secret must be present at `/root/pull-secret` on the host.
+
+All secret files are gitignored.
+
 ## How It Works
 
 When you run `make e2e INFRA=netris SUITE=caas`, the following happens:
@@ -129,7 +156,7 @@ All configuration via environment variables.
 | `OSAC_CLI_PATH` | `osac` | Path to the CLI binary |
 | `TEST` | (none) | pytest `-k` filter |
 | `INFRA` | `netris` | Infrastructure backend |
-| `SUITE` | `vmaas` | Test suite |
+| `SUITE` | `caas` | Test suite |
 | `EXTRA_VARS` | (none) | Extra variables passed to the backend |
 
 ## Adding a New Backend
