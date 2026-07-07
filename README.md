@@ -1,99 +1,114 @@
 # OSAC Test Infrastructure
 
-End-to-end test suite and pluggable infrastructure provisioning for OSAC. Tests the full stack: fulfillment CLI/API, operator, AAP provisioning, and KubeVirt VM lifecycle.
+Unified repo for OSAC end-to-end testing. Provisions infrastructure via pluggable backends and runs pytest test suites against it.
 
-## Directory Structure
+## Architecture
+
+The repo has two layers:
+
+- **`infra/`** — infrastructure backends that provision a cluster and deploy OSAC. Each backend lives in its own directory and can use any technology (Ansible, shell, Go, etc.).
+- **`tests/`** — pytest E2E test suites that validate OSAC functionality. Tests are infrastructure-agnostic — they consume environment variables and don't know which backend provisioned the cluster.
+
+A **contract** connects the two layers. Each backend implements a standard set of Makefile targets (`setup-infra`, `deploy-infra`, `deploy-osac`, etc.) and produces a `.env.cluster` file with the configuration tests need. The top-level Makefile orchestrates the full flow.
 
 ```
-tests/                          # pytest E2E test suites
-├── conftest.py                 # Session fixtures: cli, grpc, k8s, keycloak
-├── core/                       # Shared clients and helpers
-├── vmaas/                      # VMaaS tests (compute instances, networking, public IPs)
-├── caas/                       # CaaS tests (cluster lifecycle, credentials, templates)
-├── catalog/                    # Catalog item tests
-└── storage/                    # Tenant storage tests
-infra/                          # Pluggable infrastructure backends
-├── contract.md                 # Backend contract documentation
-└── netris/                     # Netris backend (Ansible-based)
-    ├── contract.mk             # Contract wrapper
-    ├── capabilities            # Supported suites
-    ├── Makefile                # Original netris-test-infra targets
-    ├── roles/                  # Ansible roles
-    ├── playbooks/              # Ansible playbooks
-    ├── inventory/              # Ansible inventory
-    └── netris-lab/             # Netris lab simulation
+infra/<backend>/                    tests/<suite>/
+┌──────────────────────┐            ┌──────────────────────┐
+│ setup-infra          │            │                      │
+│ deploy-infra         │            │ pytest test_*.py     │
+│ deploy-osac ──────────── .env.cluster ──▶                │
+│ setup-<suite>        │            │                      │
+│ destroy-osac         │            │                      │
+│ destroy-infra        │            │                      │
+│ gather               │            │                      │
+└──────────────────────┘            └──────────────────────┘
 ```
+
+### Infrastructure Backends
+
+| Backend | Technology | Description | Deploy Time |
+|---------|-----------|-------------|-------------|
+| **netris** | Ansible | Simulated Netris Spectrum-X GPU cluster with OCP and OSAC on KVM/libvirt | ~25 min (snapshot) / ~2h (full) |
+
+### Test Suites
+
+| Suite | Description |
+|-------|-------------|
+| **vmaas** | Compute instance lifecycle, restart, networking, public IPs, security groups, console, JWT auth |
+| **caas** | Cluster lifecycle, credentials, template immutability, API fields |
+| **catalog** | Catalog item lifecycle |
+| **storage** | Tenant storage lifecycle |
+
+### Compatibility Matrix
+
+Not every backend supports every test suite. Each backend declares its supported suites in a `capabilities` file. The system validates this before any deployment starts.
+
+| Backend | vmaas | caas | catalog | storage |
+|---------|:-----:|:----:|:-------:|:-------:|
+| netris  | yes   | yes  | no      | no      |
+
+Running an unsupported combination (e.g., `make e2e INFRA=netris SUITE=storage`) fails immediately with a clear error message — no time wasted on provisioning.
+
+## How It Works
+
+When you run `make e2e INFRA=netris SUITE=caas`, the following happens:
+
+1. **Validate** — checks that the `netris` backend exists and supports the `caas` suite
+2. **`setup-infra`** — installs prerequisites, caches images (`ansible-playbook playbooks/setup.yml`)
+3. **`deploy-infra`** — deploys the Netris lab, OCP cluster from snapshot (`make deploy-fast`)
+4. **`deploy-osac`** — refreshes OSAC on the restored cluster, writes `.env.cluster` with cluster access credentials
+5. **`setup-suite`** — runs CaaS-specific infrastructure setup (creates InfraEnv, boots discovery VMs, registers agents)
+6. **`run-tests`** — validates `.env.cluster` has the required variables, sources it, runs `pytest tests/caas/`
+
+Each step can be run independently — you don't have to run the full pipeline every time.
 
 ## Quick Start
 
-### Prerequisites
-
-- Python 3.11+
-- `osac` binary (matching the deployed fulfillment-service version)
-- `grpcurl`
-- `oc` / `kubectl` with cluster-admin access
-- A running OSAC deployment
-
-### Install
+### Run tests against an existing cluster
 
 ```bash
 uv sync
-```
 
-### Run Tests
-
-```bash
-# Run against an existing cluster
 OSAC_NAMESPACE=osac-devel OSAC_VM_KUBECONFIG=~/.kube/config make test-vmaas
-OSAC_NAMESPACE=osac-devel make test-caas
 
-# Filter by test name
 TEST=test_cluster_order_lifecycle make test-caas
 ```
 
-### Full E2E with Infrastructure
+### Full E2E with infrastructure provisioning
 
 ```bash
-# Deploy infra + OSAC + run CaaS tests (Netris backend)
+# Full pipeline: provision + deploy + test
 make e2e INFRA=netris SUITE=caas
 
-# Each phase independently
+# Or step by step
 make setup-infra INFRA=netris
 make deploy-infra INFRA=netris
 make deploy-osac INFRA=netris
 make setup-suite INFRA=netris SUITE=caas
 make run-tests INFRA=netris SUITE=caas
+```
 
-# Iterate on OSAC without reprovisioning the lab
+### Iterate on OSAC
+
+```bash
+# Redeploy OSAC without reprovisioning the lab
 make redeploy-osac INFRA=netris
 
-# Tear down
-make destroy-osac INFRA=netris
-make destroy-infra INFRA=netris
+# Then re-run tests
+make run-tests INFRA=netris SUITE=caas
 ```
 
-### Makefile Targets
+### Tear down
 
+```bash
+make destroy-osac INFRA=netris       # OSAC only, keep the lab
+make destroy-infra INFRA=netris      # Everything
 ```
-# Tests
-make test                               # All tests
-make test-vmaas                         # VMaaS tests
-make test-caas                          # CaaS tests
-make test-storage                       # Storage tests
-make lint                               # Ruff check + format check
-make format                             # Ruff format
 
-# Infrastructure orchestration
-make e2e INFRA=<backend> SUITE=<suite>  # Full pipeline
-make setup-infra INFRA=<backend>        # Install prerequisites
-make deploy-infra INFRA=<backend>       # Provision lab + cluster
-make deploy-osac INFRA=<backend>        # Deploy OSAC
-make setup-suite INFRA=<backend> SUITE=<suite>  # Suite-specific setup
-make run-tests INFRA=<backend> SUITE=<suite>    # Run tests
-make destroy-osac INFRA=<backend>       # Tear down OSAC
-make destroy-infra INFRA=<backend>      # Tear down everything
-make gather-infra INFRA=<backend>       # Collect diagnostics
-make redeploy-osac INFRA=<backend>      # Destroy + redeploy OSAC
+### Gather diagnostics
+
+```bash
+make gather-infra INFRA=netris
 ```
 
 ## Configuration
@@ -111,23 +126,15 @@ All configuration via environment variables.
 | `OSAC_CLUSTER_TEMPLATE` | `osac.templates.ocp_ci_small` | Cluster template |
 | `OSAC_CLI_PATH` | `osac` | Path to the CLI binary |
 | `TEST` | (none) | pytest `-k` filter |
+| `INFRA` | `netris` | Infrastructure backend |
+| `SUITE` | `vmaas` | Test suite |
+| `DEPLOY_MODE` | `snapshot` | Backend deploy mode (`snapshot` or `full`) |
+| `EXTRA_VARS` | (none) | Extra variables passed to the backend |
 
-## Infrastructure Backends
-
-Backends live in `infra/<name>/` and implement a standard contract (see `infra/contract.md`). Each backend declares which test suites it supports via a `capabilities` file.
-
-### Netris
-
-Ansible-based backend that deploys a simulated Netris Spectrum-X GPU cluster with OCP and OSAC.
-
-- **Supports:** vmaas, caas
-- **Deploy modes:** `snapshot` (default, ~25 min) or `full` (~2h)
-- **Override:** `make deploy-infra INFRA=netris DEPLOY_MODE=full`
-
-### Adding a New Backend
+## Adding a New Backend
 
 Create `infra/<name>/` with:
-- `contract.mk` — implement the contract targets
-- `capabilities` — declare `SUPPORTED_SUITES`
+- `contract.mk` — Makefile implementing the contract targets (see `infra/contract.md`)
+- `capabilities` — shell-sourceable file declaring `SUPPORTED_SUITES="suite1 suite2"`
 
-See `infra/contract.md` for the full contract specification.
+No changes to test code or the top-level Makefile are needed.
