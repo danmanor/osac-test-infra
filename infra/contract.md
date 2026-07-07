@@ -17,7 +17,8 @@ Each backend lives in `infra/<name>/` and must provide:
 | `setup-<suite>` | Suite-specific infra prep (can be no-op) |
 | `destroy-osac` | Tear down OSAC only |
 | `destroy-infra` | Tear down everything |
-| `gather` | Collect diagnostics |
+| `gather-infra` | Collect infrastructure diagnostics |
+| `gather-<suite>` | Collect suite-specific diagnostics |
 
 ## .env.infra
 

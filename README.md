@@ -20,7 +20,8 @@ infra/<backend>/                    tests/<suite>/
 │ setup-<suite>        │            │                      │
 │ destroy-osac         │            │                      │
 │ destroy-infra        │            │                      │
-│ gather               │            │                      │
+│ gather-infra         │
+│ gather-<suite>       │            │                      │
 └──────────────────────┘            └──────────────────────┘
 ```
 
@@ -109,6 +110,7 @@ make destroy-infra INFRA=netris      # Everything
 
 ```bash
 make gather-infra INFRA=netris
+make gather-suite INFRA=netris SUITE=caas
 ```
 
 ## Configuration

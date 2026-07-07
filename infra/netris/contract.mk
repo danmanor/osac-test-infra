@@ -1,7 +1,7 @@
 .PHONY: setup-infra deploy-infra deploy-osac \
        setup-vmaas setup-caas \
        destroy-osac destroy-infra \
-       gather gather-lab gather-caas cleanup-dns
+       gather-infra gather-caas cleanup-dns
 
 DEPLOY_MODE ?= snapshot
 EXTRA_VARS ?=
@@ -57,10 +57,8 @@ destroy-infra:
 
 # --- Gather ---
 
-gather:
+gather-infra:
 	$(MAKE) -f Makefile gather EXTRA_VARS='$(EXTRA_VARS)'
-
-gather-lab:
 	$(MAKE) -f Makefile gather-lab EXTRA_VARS='$(EXTRA_VARS)'
 
 gather-caas:

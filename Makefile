@@ -90,6 +90,9 @@ destroy-infra:
 	$(MAKE) -C $(INFRA_DIR) -f contract.mk destroy-infra EXTRA_VARS='$(EXTRA_VARS)'
 
 gather-infra:
-	$(MAKE) -C $(INFRA_DIR) -f contract.mk gather EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) -f contract.mk gather-infra EXTRA_VARS='$(EXTRA_VARS)'
+
+gather-suite:
+	$(MAKE) -C $(INFRA_DIR) -f contract.mk gather-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)'
 
 redeploy-osac: destroy-osac deploy-osac
