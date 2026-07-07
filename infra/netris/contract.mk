@@ -5,7 +5,7 @@
 
 DEPLOY_MODE ?= snapshot
 EXTRA_VARS ?=
-ENV_CLUSTER := .env.cluster
+ENV_CLUSTER := .env.infra
 
 # --- Setup: installations and prerequisites ---
 

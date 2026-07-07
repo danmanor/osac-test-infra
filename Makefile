@@ -48,11 +48,11 @@ _validate-backend:
 		  exit 1; }
 
 _validate-suite-contract:
-	@if [ ! -f $(INFRA_DIR)/.env.cluster ]; then \
-		echo "ERROR: $(INFRA_DIR)/.env.cluster not found. Run 'make deploy-osac' first."; exit 1; \
+	@if [ ! -f $(INFRA_DIR)/.env.infra ]; then \
+		echo "ERROR: $(INFRA_DIR)/.env.infra not found. Run 'make deploy-osac' first."; exit 1; \
 	fi
 	@if [ -f tests/$(SUITE)/contract ]; then \
-		set -a && . $(INFRA_DIR)/.env.cluster && set +a && \
+		set -a && . $(INFRA_DIR)/.env.infra && set +a && \
 		. tests/$(SUITE)/contract && \
 		missing="" && \
 		for var in $$REQUIRED_VARS; do \
@@ -80,7 +80,7 @@ setup-suite: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) -f contract.mk setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)'
 
 run-tests: _validate-suite-contract
-	@set -a && . $(INFRA_DIR)/.env.cluster && set +a && \
+	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \
 		$(MAKE) test-$(SUITE)
 
 destroy-osac:

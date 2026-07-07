@@ -21,4 +21,4 @@ build/
 reports/
 
 # Infrastructure backend outputs
-infra/*/.env.cluster
+infra/*/.env.infra

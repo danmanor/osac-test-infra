@@ -9,14 +9,14 @@ The repo has two layers:
 - **`infra/`** — infrastructure backends that provision a cluster and deploy OSAC. Each backend lives in its own directory and can use any technology (Ansible, shell, Go, etc.).
 - **`tests/`** — pytest E2E test suites that validate OSAC functionality. Tests are infrastructure-agnostic — they consume environment variables and don't know which backend provisioned the cluster.
 
-A **contract** connects the two layers. Each backend implements a standard set of Makefile targets (`setup-infra`, `deploy-infra`, `deploy-osac`, etc.) and produces a `.env.cluster` file with the configuration tests need. The top-level Makefile orchestrates the full flow.
+A **contract** connects the two layers. Each backend implements a standard set of Makefile targets (`setup-infra`, `deploy-infra`, `deploy-osac`, etc.) and produces a `.env.infra` file with the configuration tests need. The top-level Makefile orchestrates the full flow.
 
 ```
 infra/<backend>/                    tests/<suite>/
 ┌──────────────────────┐            ┌──────────────────────┐
 │ setup-infra          │            │                      │
 │ deploy-infra         │            │ pytest test_*.py     │
-│ deploy-osac ──────────── .env.cluster ──▶                │
+│ deploy-osac ──────────── .env.infra ──▶                │
 │ setup-<suite>        │            │                      │
 │ destroy-osac         │            │                      │
 │ destroy-infra        │            │                      │
@@ -56,9 +56,9 @@ When you run `make e2e INFRA=netris SUITE=caas`, the following happens:
 1. **Validate** — checks that the `netris` backend exists and supports the `caas` suite
 2. **`setup-infra`** — installs prerequisites, caches images (`ansible-playbook playbooks/setup.yml`)
 3. **`deploy-infra`** — deploys the Netris lab, OCP cluster from snapshot (`make deploy-fast`)
-4. **`deploy-osac`** — refreshes OSAC on the restored cluster, writes `.env.cluster` with cluster access credentials
+4. **`deploy-osac`** — refreshes OSAC on the restored cluster, writes `.env.infra` with cluster access credentials
 5. **`setup-suite`** — runs CaaS-specific infrastructure setup (creates InfraEnv, boots discovery VMs, registers agents)
-6. **`run-tests`** — validates `.env.cluster` has the required variables, sources it, runs `pytest tests/caas/`
+6. **`run-tests`** — validates `.env.infra` has the required variables, sources it, runs `pytest tests/caas/`
 
 Each step can be run independently — you don't have to run the full pipeline every time.
 

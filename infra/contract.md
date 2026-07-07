@@ -13,15 +13,15 @@ Each backend lives in `infra/<name>/` and must provide:
 |---|---|
 | `setup-infra` | Install prerequisites and dependencies |
 | `deploy-infra` | Provision the lab and cluster |
-| `deploy-osac` | Deploy OSAC, write `.env.cluster` |
+| `deploy-osac` | Deploy OSAC, write `.env.infra` |
 | `setup-<suite>` | Suite-specific infra prep (can be no-op) |
 | `destroy-osac` | Tear down OSAC only |
 | `destroy-infra` | Tear down everything |
 | `gather` | Collect diagnostics |
 
-## .env.cluster
+## .env.infra
 
-After `deploy-osac`, write `.env.cluster` in the backend directory:
+After `deploy-osac`, write `.env.infra` in the backend directory:
 
 ```
 KUBECONFIG=<path>
