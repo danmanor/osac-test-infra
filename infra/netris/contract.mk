@@ -3,39 +3,29 @@
        destroy-osac destroy-infra \
        gather-infra gather-caas cleanup-dns
 
-DEPLOY_MODE ?= snapshot
 EXTRA_VARS ?=
-ENV_CLUSTER := .env.infra
+ENV_INFRA := .env.infra
 
 # --- Setup: installations and prerequisites ---
 
 setup-infra:
 	$(MAKE) -f Makefile setup EXTRA_VARS='$(EXTRA_VARS)'
 
-# --- Deploy: lab + OCP ---
+# --- Deploy: netris lab ---
 
 deploy-infra:
-ifeq ($(DEPLOY_MODE),snapshot)
-	$(MAKE) -f Makefile deploy-fast EXTRA_VARS='$(EXTRA_VARS)'
-else
 	$(MAKE) -f Makefile deploy-lab EXTRA_VARS='$(EXTRA_VARS)'
-	$(MAKE) -f Makefile deploy-ocp EXTRA_VARS='$(EXTRA_VARS)'
-endif
 
-# --- Deploy: OSAC ---
+# --- Deploy: OCP + OSAC from snapshot ---
 
 deploy-osac:
-ifeq ($(DEPLOY_MODE),snapshot)
-	$(MAKE) -f Makefile snapshot-refresh EXTRA_VARS='$(EXTRA_VARS)'
-else
-	$(MAKE) -f Makefile deploy-osac EXTRA_VARS='$(EXTRA_VARS)'
-endif
+	$(MAKE) -f Makefile deploy-ocp-snapshot EXTRA_VARS='$(EXTRA_VARS)'
 	@printf '%s\n' \
 		'KUBECONFIG=/root/.kube/config' \
 		'OSAC_NAMESPACE=$(or $(OSAC_NAMESPACE),osac-e2e-ci)' \
 		'OSAC_VM_KUBECONFIG=/root/.kube/config' \
 		'OSAC_PULL_SECRET_PATH=$(or $(OSAC_PULL_SECRET_PATH),/root/pull-secret)' \
-		> $(ENV_CLUSTER)
+		> $(ENV_INFRA)
 
 # --- Suite setup ---
 
@@ -46,19 +36,19 @@ setup-caas:
 
 destroy-osac:
 	$(MAKE) -f Makefile destroy-osac EXTRA_VARS='$(EXTRA_VARS)'
-	@rm -f $(ENV_CLUSTER)
+	@rm -f $(ENV_INFRA)
 
 destroy-infra:
 	$(MAKE) -f Makefile destroy EXTRA_VARS='$(EXTRA_VARS)'
-	@rm -f $(ENV_CLUSTER)
+	@rm -f $(ENV_INFRA)
 
 # --- Gather ---
 
 gather-infra:
-	$(MAKE) -f Makefile gather EXTRA_VARS='$(EXTRA_VARS)'
 	$(MAKE) -f Makefile gather-lab EXTRA_VARS='$(EXTRA_VARS)'
 
 gather-caas:
+	$(MAKE) -f Makefile gather EXTRA_VARS='$(EXTRA_VARS)'
 	$(MAKE) -f Makefile gather-caas EXTRA_VARS='$(EXTRA_VARS)'
 
 cleanup-dns:

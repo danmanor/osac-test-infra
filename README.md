@@ -130,7 +130,6 @@ All configuration via environment variables.
 | `TEST` | (none) | pytest `-k` filter |
 | `INFRA` | `netris` | Infrastructure backend |
 | `SUITE` | `vmaas` | Test suite |
-| `DEPLOY_MODE` | `snapshot` | Backend deploy mode (`snapshot` or `full`) |
 | `EXTRA_VARS` | (none) | Extra variables passed to the backend |
 
 ## Adding a New Backend

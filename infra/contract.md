@@ -35,4 +35,4 @@ The top-level Makefile sources this file before running tests.
 
 ## Variables
 
-Backends receive `EXTRA_VARS` and `DEPLOY_MODE` from the top-level Makefile.
+Backends receive `EXTRA_VARS` from the top-level Makefile.

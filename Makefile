@@ -28,8 +28,7 @@ test-storage:
 # ─── Infrastructure orchestration ───────────────────────────────────
 
 INFRA       ?= netris
-SUITE       ?= vmaas
-DEPLOY_MODE ?= snapshot
+SUITE       ?= caas
 EXTRA_VARS  ?=
 INFRA_DIR    = infra/$(INFRA)
 
@@ -71,10 +70,10 @@ setup-infra: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) -f contract.mk setup-infra EXTRA_VARS='$(EXTRA_VARS)'
 
 deploy-infra: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) -f contract.mk deploy-infra DEPLOY_MODE=$(DEPLOY_MODE) EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) -f contract.mk deploy-infra EXTRA_VARS='$(EXTRA_VARS)'
 
 deploy-osac: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) -f contract.mk deploy-osac DEPLOY_MODE=$(DEPLOY_MODE) EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) -f contract.mk deploy-osac EXTRA_VARS='$(EXTRA_VARS)'
 
 setup-suite: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) -f contract.mk setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)'
