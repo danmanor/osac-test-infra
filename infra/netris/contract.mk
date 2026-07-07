@@ -35,7 +35,7 @@ setup-caas:
 # --- Destroy ---
 
 destroy-osac:
-	$(MAKE) -f Makefile destroy-osac EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -f Makefile destroy-ocp EXTRA_VARS='$(EXTRA_VARS)'
 	@rm -f $(ENV_INFRA)
 
 destroy-infra:
