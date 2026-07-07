@@ -25,10 +25,6 @@ test-storage:
 	mkdir -p $(REPORTS_DIR)
 	pytest tests/storage/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/storage.xml
 
-test-catalog:
-	mkdir -p $(REPORTS_DIR)
-	pytest tests/catalog/ -v $(if $(TEST),-k "$(TEST)") --junitxml=$(REPORTS_DIR)/catalog.xml
-
 # ─── Infrastructure orchestration ───────────────────────────────────
 
 INFRA       ?= netris
