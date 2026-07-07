@@ -46,7 +46,7 @@ Not every backend supports every test suite. Each backend declares its supported
 
 | Backend | vmaas | caas | catalog | storage |
 |---------|:-----:|:----:|:-------:|:-------:|
-| netris  | yes   | yes  | no      | no      |
+| netris  | no    | yes  | no      | no      |
 
 Running an unsupported combination (e.g., `make e2e INFRA=netris SUITE=storage`) fails immediately with a clear error message — no time wasted on provisioning.
 

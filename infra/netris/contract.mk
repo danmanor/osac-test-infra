@@ -1,5 +1,5 @@
 .PHONY: setup-infra deploy-infra deploy-osac \
-       setup-vmaas setup-caas \
+       setup-caas \
        destroy-osac destroy-infra \
        gather-infra gather-caas cleanup-dns
 
@@ -38,9 +38,6 @@ endif
 		> $(ENV_CLUSTER)
 
 # --- Suite setup ---
-
-setup-vmaas:
-	@true
 
 setup-caas:
 	$(MAKE) -f Makefile setup-caas EXTRA_VARS='$(EXTRA_VARS)'
