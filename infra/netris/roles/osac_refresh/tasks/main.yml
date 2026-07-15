@@ -15,6 +15,43 @@
   changed_when: _submodule_update.stdout | length > 0
   when: not (osac_installer_skip_clone | default(false) | bool)
 
+- name: Cherry-pick upstream fixes for refresh-after-snapshot
+  ansible.builtin.shell:
+    cmd: |
+      git fetch origin fix/config-as-code-ig-helm-conflict
+      git cherry-pick --no-commit b0b2cfb
+    chdir: "{{ osac_installer_dir }}"
+  register: _cherry_pick
+  changed_when: _cherry_pick.rc == 0
+  failed_when: false
+  when: not (osac_installer_skip_clone | default(false) | bool)
+
+- name: Patch refresh-after-snapshot.py for snapshot compatibility
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ osac_installer_dir }}/scripts
+      python3 -c "
+      import re
+      p = 'refresh-after-snapshot.py'
+      t = open(p).read()
+      # Remove dead ensure_ca_bundle call
+      t = t.replace(
+          '        (\"ensure CA bundle\", lambda: ensure_ca_bundle(config)),\n', '')
+      # Add certificate.cert-manager.io to adoption resource types
+      t = t.replace(
+          'all,configmap,secret,route',
+          'all,configmap,secret,route,certificate.cert-manager.io')
+      # Delete stale hub-access RoleBinding before helm upgrade
+      if 'hub-access' not in t.split('upgrade_osac')[1].split('helm')[0]:
+          t = t.replace(
+              '    oc(\"delete\", \"secret\", \"config-as-code-ig\"',
+              '    oc(\"delete\", \"rolebinding\", \"hub-access\", \"-n\", config.namespace,\n       \"--ignore-not-found\")\n    oc(\"delete\", \"secret\", \"config-as-code-ig\"')
+      open(p, 'w').write(t)
+      "
+    chdir: "{{ osac_installer_dir }}"
+  changed_when: true
+  when: not (osac_installer_skip_clone | default(false) | bool)
+
 - name: Override osac-operator code in installer
   ansible.builtin.git:
     repo: "{{ osac_operator_repo }}"
