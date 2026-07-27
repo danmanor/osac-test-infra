@@ -17,11 +17,11 @@
 
 - name: Run lab gather
   ansible.builtin.include_role:
-    name: gather_lab
+    name: gather-infra
 
 - name: Run caas gather
   ansible.builtin.include_role:
-    name: gather_caas
+    name: gather-caas
 
 - name: Create latest symlink
   ansible.builtin.file:

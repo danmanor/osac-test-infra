@@ -3,5 +3,5 @@
   hosts: all
   gather_facts: false
   roles:
-    - caas_discovery
-    - caas_setup
+    - caas-discovery
+    - caas-setup

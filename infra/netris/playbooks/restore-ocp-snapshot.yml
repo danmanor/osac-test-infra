@@ -3,6 +3,6 @@
   hosts: all
   gather_facts: false
   roles:
-    - netris_configure
-    - ocp_dns
+    - netris-configure
+    - ocp-dns
     - restore-snapshot

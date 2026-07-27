@@ -4,7 +4,7 @@
     file: "{{ netris_lab_dir }}/group_vars/all.yml"
 
 - name: Pre-flight checks
-  ansible.builtin.include_tasks: "{{ role_path }}/../lab_deploy/tasks/preflight.yml"
+  ansible.builtin.include_tasks: "{{ role_path }}/../deploy-infra/tasks/preflight.yml"
 
 - name: Install Ansible collections
   ansible.builtin.command:
@@ -157,4 +157,4 @@
 
 - name: Cache snapshot flavor image
   ansible.builtin.include_role:
-    name: snapshot_pull
+    name: snapshot-pull

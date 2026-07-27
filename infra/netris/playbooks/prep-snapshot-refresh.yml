@@ -3,4 +3,4 @@
   hosts: all
   gather_facts: false
   roles:
-    - osac_refresh
+    - prep-refresh-osac

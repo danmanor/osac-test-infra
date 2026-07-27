@@ -20,7 +20,7 @@
         mode: "0755"
       failed_when: false
   roles:
-    - gather_caas
+    - gather-caas
   post_tasks:
     - name: Print gather location
       ansible.builtin.debug:
