@@ -1,33 +1,48 @@
-.PHONY: deploy deploy-fast setup deploy-lab deploy-ocp deploy-ocp-snapshot deploy-osac \
-       restore-ocp-snapshot snapshot-refresh prep-snapshot-refresh \
-       run-snapshot-refresh post-snapshot-refresh \
+.PHONY: setup-infra deploy-infra deploy-ocp deploy-osac \
+       install-osac prep-osac run-osac-setup post-osac \
+       refresh-osac prep-refresh-osac run-refresh-osac post-refresh-osac \
+       restore-ocp \
        setup-caas deploy-caas \
-       deploy-vmaas deploy-bmaas \
-       destroy destroy-osac destroy-ocp destroy-caas destroy-vmaas destroy-bmaas \
-       connectivity prep-osac run-osac-setup post-osac vendor-update lint \
-       gather gather-lab gather-caas \
-       cleanup-dns
+       destroy-osac destroy-ocp destroy-infra destroy-caas \
+       connectivity vendor-update lint \
+       gather-infra gather-caas cleanup-dns
 
+OSAC_DEPLOY_MODE ?= fresh
 EXTRA_VARS ?=
 ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)')
+ENV_INFRA := .env.infra
 
-# Full shared pipeline
-deploy: deploy-lab deploy-ocp deploy-osac
+# Namespace/values defaults — match inventory/group_vars/all.yml
+OSAC_NAMESPACE ?= osac-e2e-ci
+OSAC_VALUES_FILE ?= values/caas-ci/values.yaml
+OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 
-setup:
-	ansible-playbook playbooks/setup.yml $(ANSIBLE_EXTRA)
+# --- Pipeline targets (contract-aligned) ---
 
-deploy-lab:
-	ansible-playbook playbooks/deploy-lab.yml $(ANSIBLE_EXTRA)
+setup-infra:
+	ansible-playbook playbooks/setup-infra.yml $(ANSIBLE_EXTRA)
 
-connectivity:
-	ansible-playbook playbooks/connectivity-lab.yml $(ANSIBLE_EXTRA)
+deploy-infra:
+	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA)
 
 deploy-ocp:
-	ansible-playbook playbooks/setup-ocp.yml $(ANSIBLE_EXTRA)
-	ansible-playbook playbooks/install-ocp.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-ocp.yml $(ANSIBLE_EXTRA)
 
-deploy-osac: prep-osac run-osac-setup post-osac
+deploy-osac:
+ifeq ($(OSAC_DEPLOY_MODE),snapshot)
+	$(MAKE) refresh-osac
+else
+	$(MAKE) install-osac
+endif
+	@printf '%s\n' \
+		'KUBECONFIG=/root/.kube/config' \
+		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
+		'OSAC_VM_KUBECONFIG=/root/.kube/config' \
+		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
+		> $(ENV_INFRA)
+
+# Fresh install sub-targets
+install-osac: prep-osac run-osac-setup post-osac
 
 prep-osac:
 	ansible-playbook playbooks/prep-osac.yml $(ANSIBLE_EXTRA)
@@ -35,74 +50,61 @@ prep-osac:
 run-osac-setup:
 	@echo "=== Installing OSAC via Helm (make install) ==="
 	cd /opt/osac-installer && make install \
-		INSTALLER_NAMESPACE=$(or $(OSAC_NAMESPACE),$(shell grep '^osac_namespace:' inventory/group_vars/all.yml | awk '{print $$2}' | tr -d '"')) \
-		VALUES_FILE=$(or $(OSAC_VALUES_FILE),$(shell grep '^osac_values_file:' inventory/group_vars/all.yml | awk '{print $$2}' | tr -d '"'))
+		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
+		VALUES_FILE=$(OSAC_VALUES_FILE)
 
 post-osac:
 	ansible-playbook playbooks/post-osac.yml $(ANSIBLE_EXTRA)
 
-# Per-flow targets — run after deploy
+# Snapshot-refresh sub-targets
+refresh-osac: prep-refresh-osac run-refresh-osac post-refresh-osac
+
+prep-refresh-osac:
+	ansible-playbook playbooks/prep-refresh-osac.yml $(ANSIBLE_EXTRA)
+
+run-refresh-osac:
+	@echo "=== Running OSAC refresh ==="
+	cd /opt/osac-installer && \
+		KUBECONFIG=/root/.kube/config \
+		VALUES_FILE=$(OSAC_VALUES_FILE) \
+		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
+		python3 -u scripts/refresh-after-snapshot.py
+
+post-refresh-osac:
+	ansible-playbook playbooks/post-refresh-osac.yml $(ANSIBLE_EXTRA)
+
+# CaaS targets
 setup-caas:
 	ansible-playbook playbooks/setup-caas.yml $(ANSIBLE_EXTRA)
 
 deploy-caas:
 	ansible-playbook playbooks/deploy-caas.yml $(ANSIBLE_EXTRA)
 
-deploy-vmaas:
-	@echo "VMaaS flow is not yet implemented"
-
-deploy-bmaas:
-	@echo "BMaaS flow is not yet implemented"
-
-# Snapshot-based fast deployment
-deploy-fast: deploy-lab deploy-ocp-snapshot
-
-deploy-ocp-snapshot: restore-ocp-snapshot snapshot-refresh
-
-restore-ocp-snapshot:
-	ansible-playbook playbooks/restore-ocp-snapshot.yml $(ANSIBLE_EXTRA)
-
-snapshot-refresh: prep-snapshot-refresh run-snapshot-refresh post-snapshot-refresh
-
-prep-snapshot-refresh:
-	ansible-playbook playbooks/prep-snapshot-refresh.yml $(ANSIBLE_EXTRA)
-
-run-snapshot-refresh:
-	@echo "=== Running OSAC refresh with live output ==="
-	cd /opt/osac-installer && \
-		KUBECONFIG=/root/.kube/config \
-		VALUES_FILE=$(or $(SNAPSHOT_VALUES_FILE),values/caas-ci/values.yaml) \
-		INSTALLER_NAMESPACE=$(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) \
-		python3 -u scripts/refresh-after-snapshot.py
-
-post-snapshot-refresh:
-	ansible-playbook playbooks/post-snapshot-refresh.yml $(ANSIBLE_EXTRA)
-
-# Destroy targets
-destroy:
-	ansible-playbook playbooks/destroy.yml $(ANSIBLE_EXTRA)
+# --- Destroy ---
 
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
 	cd /opt/osac-installer && make uninstall \
-		INSTALLER_NAMESPACE=$(or $(OSAC_NAMESPACE),$(shell grep '^osac_namespace:' inventory/group_vars/all.yml | awk '{print $$2}' | tr -d '"')) \
-		VALUES_FILE=$(or $(OSAC_VALUES_FILE),$(shell grep '^osac_values_file:' inventory/group_vars/all.yml | awk '{print $$2}' | tr -d '"')) \
-		2>/dev/null || true
-	rm -rf /opt/osac-installer
+		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
+		VALUES_FILE=$(OSAC_VALUES_FILE) 2>/dev/null || true
+	rm -rf /opt/osac-installer /opt/osac-installer-full
+	@rm -f $(ENV_INFRA)
 
 destroy-ocp:
 	ansible-playbook playbooks/destroy-ocp.yml $(ANSIBLE_EXTRA)
 
+destroy-infra:
+	ansible-playbook playbooks/destroy-infra.yml $(ANSIBLE_EXTRA)
+	@rm -f $(ENV_INFRA)
+
 destroy-caas:
 	ansible-playbook playbooks/destroy-caas.yml $(ANSIBLE_EXTRA)
 
-destroy-vmaas:
-	@echo "VMaaS teardown is not yet implemented"
+# --- Utilities ---
 
-destroy-bmaas:
-	@echo "BMaaS teardown is not yet implemented"
+connectivity:
+	ansible-playbook playbooks/connectivity.yml $(ANSIBLE_EXTRA)
 
-# Utilities
 vendor-update:
 	rm -rf vendor/ansible_collections
 	ansible-galaxy collection install -r requirements.yml -p vendor --force
@@ -111,11 +113,8 @@ vendor-update:
 lint:
 	ansible-lint
 
-gather:
-	ansible-playbook playbooks/gather.yml $(ANSIBLE_EXTRA)
-
-gather-lab:
-	ansible-playbook playbooks/gather-lab.yml $(ANSIBLE_EXTRA)
+gather-infra:
+	ansible-playbook playbooks/gather-infra.yml $(ANSIBLE_EXTRA)
 
 gather-caas:
 	ansible-playbook playbooks/gather-caas.yml $(ANSIBLE_EXTRA)

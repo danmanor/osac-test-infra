@@ -1,54 +1,41 @@
-.PHONY: setup-infra deploy-infra deploy-osac \
+.PHONY: setup-infra deploy-infra deploy-ocp deploy-osac \
        setup-caas \
-       destroy-osac destroy-infra \
+       destroy-osac destroy-ocp destroy-infra destroy-caas \
        gather-infra gather-caas cleanup-dns
 
 EXTRA_VARS ?=
-ENV_INFRA := .env.infra
-
-# --- Setup: installations and prerequisites ---
 
 setup-infra:
-	$(MAKE) -f Makefile setup EXTRA_VARS='$(EXTRA_VARS)'
-
-# --- Deploy: netris lab ---
+	$(MAKE) -f Makefile setup-infra EXTRA_VARS='$(EXTRA_VARS)'
 
 deploy-infra:
-	$(MAKE) -f Makefile deploy-lab EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -f Makefile deploy-infra EXTRA_VARS='$(EXTRA_VARS)'
 
-# --- Deploy: OCP + OSAC from snapshot ---
+deploy-ocp:
+	$(MAKE) -f Makefile deploy-ocp EXTRA_VARS='$(EXTRA_VARS)'
 
 deploy-osac:
-	$(MAKE) -f Makefile deploy-ocp-snapshot EXTRA_VARS='$(EXTRA_VARS)'
-	@printf '%s\n' \
-		'KUBECONFIG=/root/.kube/config' \
-		'OSAC_NAMESPACE=$(or $(OSAC_NAMESPACE),osac-e2e-ci)' \
-		'OSAC_VM_KUBECONFIG=/root/.kube/config' \
-		'OSAC_PULL_SECRET_PATH=$(or $(OSAC_PULL_SECRET_PATH),/root/pull-secret)' \
-		> $(ENV_INFRA)
-
-# --- Suite setup ---
+	$(MAKE) -f Makefile deploy-osac EXTRA_VARS='$(EXTRA_VARS)'
 
 setup-caas:
 	$(MAKE) -f Makefile setup-caas EXTRA_VARS='$(EXTRA_VARS)'
 
-# --- Destroy ---
-
 destroy-osac:
+	$(MAKE) -f Makefile destroy-osac EXTRA_VARS='$(EXTRA_VARS)'
+
+destroy-ocp:
 	$(MAKE) -f Makefile destroy-ocp EXTRA_VARS='$(EXTRA_VARS)'
-	@rm -f $(ENV_INFRA)
 
 destroy-infra:
-	$(MAKE) -f Makefile destroy EXTRA_VARS='$(EXTRA_VARS)'
-	@rm -f $(ENV_INFRA)
+	$(MAKE) -f Makefile destroy-infra EXTRA_VARS='$(EXTRA_VARS)'
 
-# --- Gather ---
+destroy-caas:
+	$(MAKE) -f Makefile destroy-caas EXTRA_VARS='$(EXTRA_VARS)'
 
 gather-infra:
-	$(MAKE) -f Makefile gather-lab EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -f Makefile gather-infra EXTRA_VARS='$(EXTRA_VARS)'
 
 gather-caas:
-	$(MAKE) -f Makefile gather EXTRA_VARS='$(EXTRA_VARS)'
 	$(MAKE) -f Makefile gather-caas EXTRA_VARS='$(EXTRA_VARS)'
 
 cleanup-dns:
