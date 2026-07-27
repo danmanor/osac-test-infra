@@ -46,8 +46,8 @@ assisted_service_ip: "198.51.100.9"
 osac_installer_repo: "https://github.com/osac-project/osac-installer.git"
 osac_installer_branch: "main"
 osac_installer_dir: "/opt/osac-installer"
-osac_namespace: "osac-devel"
-osac_values_file: "values/development/values.yaml"
+osac_namespace: "osac-e2e-ci"
+osac_values_file: "values/caas-ci/values.yaml"
 osac_license_path: "{{ inventory_dir }}/../license.zip"
 
 # OSAC Component overrides
