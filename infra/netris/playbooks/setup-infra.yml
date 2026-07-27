@@ -7,7 +7,7 @@
 # exists" shortcut instead of hitting the broken code path. Guarded with
 # `| default({})`/`| default('')` so this has no effect on unrelated get_url
 # tasks elsewhere in this play (e.g. prerequisites' own "Download Go").
-- name: Setup Netris lab (prerequisites + cache)
+- name: Setup infrastructure prerequisites
   hosts: all
   gather_facts: true
   become: true

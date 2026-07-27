@@ -72,7 +72,7 @@
     - not (osac_installer_skip_clone | default(false) | bool)
     - fulfillment_service_branch | default('') | length > 0
 
-# Job-scoped, non-root install -- consistent with roles/lab_setup's osac
+# Job-scoped, non-root install -- consistent with roles/setup-infra's osac
 # build. Neither this task nor anything in its call chain
 # (playbooks/prep-snapshot-refresh.yml, ansible.cfg) sets become: true, so
 # this was already running as the unprivileged connecting user; it was just
@@ -81,7 +81,7 @@
 # future caller wraps this role in a become: true play.
 #
 # lookup('env', 'HOME'), not ansible_env.HOME -- see the identical note in
-# roles/lab_setup/tasks/main.yml for why.
+# roles/setup-infra/tasks/main.yml for why.
 - name: Ensure non-root install directory exists
   ansible.builtin.file:
     path: "{{ lookup('env', 'HOME') }}/.local/bin"

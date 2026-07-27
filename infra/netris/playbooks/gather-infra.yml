@@ -1,0 +1,6 @@
+---
+- name: Gather infrastructure diagnostics
+  hosts: all
+  gather_facts: false
+  roles:
+    - gather-infra
