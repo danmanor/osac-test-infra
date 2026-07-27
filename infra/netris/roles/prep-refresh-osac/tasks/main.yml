@@ -19,7 +19,7 @@
   ansible.builtin.shell:
     cmd: |
       git fetch origin fix/config-as-code-ig-helm-conflict
-      git cherry-pick --no-commit b0b2cfb
+      git cherry-pick --no-commit b0b2cfb || { git cherry-pick --abort; exit 1; }
     chdir: "{{ osac_installer_dir }}"
   register: _cherry_pick
   changed_when: _cherry_pick.rc == 0
