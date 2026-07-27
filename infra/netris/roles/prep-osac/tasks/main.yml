@@ -113,6 +113,14 @@
     _netris_resource_class_map: >-
       {"{{ caas_host_type_id }}":{"server_cluster_template_id":{{ _netris_sct_id }},"mgmt_interface":"ens4","vpc_interfaces":["ens5"]}}
 
+# --- Read SSH private key for instance group secrets ---
+
+- name: Read SSH private key
+  ansible.builtin.slurp:
+    src: "{{ ssh_public_key_path | regex_replace('\\.pub$', '') }}"
+  register: _ssh_private_key
+  no_log: true
+
 # --- Patch values file with all settings ---
 
 - name: Read current values file
@@ -157,7 +165,9 @@
             }, 'secret': {
               'NETRIS_PASSWORD': netris_password,
               'AWS_ACCESS_KEY_ID': aws_access_key_id,
-              'AWS_SECRET_ACCESS_KEY': aws_secret_access_key
+              'AWS_SECRET_ACCESS_KEY': aws_secret_access_key,
+              'SERVER_SSH_KEY': _ssh_private_key.content | b64decode,
+              'SERVER_SSH_BASTION_KEY': _ssh_private_key.content | b64decode
             }},
             'networkFulfillment': {'enabled': true, 'config': {
               'NETRIS_CONTROLLER_URL': _netris_ctl_url,
