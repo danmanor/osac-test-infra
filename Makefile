@@ -36,8 +36,8 @@ SUITE       ?= caas
 EXTRA_VARS  ?=
 INFRA_DIR    = infra/$(INFRA)
 
-.PHONY: e2e setup-infra deploy-infra deploy-osac setup-suite run-tests \
-        destroy-osac destroy-infra gather-infra redeploy-osac \
+.PHONY: e2e setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
+        destroy-ocp destroy-osac destroy-infra gather-infra gather-suite redeploy-osac \
         _validate-backend _validate-suite-contract
 
 _validate-backend:
@@ -68,13 +68,16 @@ _validate-suite-contract:
 		fi; \
 	fi
 
-e2e: _validate-backend setup-infra deploy-infra deploy-osac setup-suite run-tests
+e2e: _validate-backend setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests
 
 setup-infra: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) -f contract.mk setup-infra EXTRA_VARS='$(EXTRA_VARS)'
 
 deploy-infra: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) -f contract.mk deploy-infra EXTRA_VARS='$(EXTRA_VARS)'
+
+deploy-ocp: _validate-backend
+	$(MAKE) -C $(INFRA_DIR) -f contract.mk deploy-ocp EXTRA_VARS='$(EXTRA_VARS)'
 
 deploy-osac: _validate-backend
 	$(MAKE) -C $(INFRA_DIR) -f contract.mk deploy-osac EXTRA_VARS='$(EXTRA_VARS)'
@@ -85,6 +88,9 @@ setup-suite: _validate-backend
 run-tests: _validate-suite-contract
 	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \
 		$(MAKE) test-$(SUITE)
+
+destroy-ocp:
+	$(MAKE) -C $(INFRA_DIR) -f contract.mk destroy-ocp EXTRA_VARS='$(EXTRA_VARS)'
 
 destroy-osac:
 	$(MAKE) -C $(INFRA_DIR) -f contract.mk destroy-osac EXTRA_VARS='$(EXTRA_VARS)'
