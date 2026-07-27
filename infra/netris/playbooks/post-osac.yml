@@ -1,8 +1,20 @@
 ---
-- name: Post-OSAC — scale down MCE operators and filter OS images
+- name: Post-OSAC — scale down MCE operators and filter OS images (snapshot mode only)
   hosts: all
   gather_facts: false
   tasks:
+    # In fresh mode, the osac-prereqs chart creates AgentServiceConfig with
+    # only the target OCP version's osImage entry, so infrastructure-operator
+    # never populates OS_IMAGES with all 47 default versions. Scaling it down
+    # would break setup-caas (which needs it running to regenerate the
+    # assisted-service auth keypair). Skip the entire post-osac flow.
+    #
+    # In snapshot mode, the baked-in snapshot has all default OS_IMAGES entries,
+    # so we must scale down the operators and filter to the target version.
+    - name: Skip post-osac in fresh deploy mode
+      ansible.builtin.meta: end_play
+      when: osac_deploy_mode | default('fresh') == 'fresh'
+
     - name: Scale down MCE operators to prevent OS_IMAGES overwrites
       ansible.builtin.command:
         cmd: oc scale deployment {{ item }} -n multicluster-engine --replicas=0
