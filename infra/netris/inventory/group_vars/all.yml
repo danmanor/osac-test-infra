@@ -64,6 +64,7 @@ fulfillment_service_image: ""
 osac_aap_repo: "https://github.com/osac-project/osac-aap.git"
 osac_aap_branch: ""
 osac_aap_image: ""
+osac_ui_image: ""
 
 # Snapshot-based deployment (fast path)
 # Deploy mode: "fresh" (OCP-only snapshot + Helm install) or

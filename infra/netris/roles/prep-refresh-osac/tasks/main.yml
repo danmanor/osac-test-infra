@@ -132,6 +132,13 @@
         {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
   when: osac_aap_branch | default('') | length > 0
 
+- name: Override osac-ui image in values file
+  ansible.builtin.shell:
+    cmd: |
+      sed -i 's|[a-zA-Z0-9./_-]*osac-ui:[a-zA-Z0-9._-]*|{{ osac_ui_image }}|g' \
+        {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
+  when: osac_ui_image | default('') | length > 0
+
 - name: Disable osac-ui (image not published yet)
   ansible.builtin.shell:
     cmd: |
