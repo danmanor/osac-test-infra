@@ -18,6 +18,58 @@
     mode: "0600"
     force: false
 
+# --- OCP prerequisites for CaaS (maxPods) ---
+
+- name: Apply KubeletConfig for maxPods 500
+  ansible.builtin.shell:
+    cmd: |
+      cat <<'EOF' | oc apply -f -
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: KubeletConfig
+      metadata:
+        name: set-master-max-pods
+      spec:
+        machineConfigPoolSelector:
+          matchLabels:
+            pools.operator.machineconfiguration.openshift.io/master: ""
+        kubeletConfig:
+          maxPods: 500
+      EOF
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: true
+
+- name: Wait for MCP master to start updating
+  ansible.builtin.shell:
+    cmd: oc get mcp/master -o 'jsonpath={.status.conditions[?(@.type=="Updating")].status}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _mcp_updating
+  until: _mcp_updating.stdout == 'True'
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Wait for MCP master to finish updating
+  ansible.builtin.command:
+    cmd: oc wait --for=condition=Updated mcp/master --timeout=900s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Wait for node to be Ready after MCP reboot
+  ansible.builtin.command:
+    cmd: oc wait --for=condition=Ready nodes --all --timeout=300s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  retries: 3
+  delay: 30
+  register: _node_ready
+  until: _node_ready.rc == 0
+
+# --- Clone and configure osac-installer ---
+
 - name: Clone osac-installer
   ansible.builtin.git:
     repo: "{{ osac_installer_repo }}"
