@@ -134,34 +134,17 @@
         snapshot_source_cluster: "{{ _src_api_url | regex_search('api\\.([^.]+)\\.', '\\1') | first }}"
         snapshot_source_domain: "{{ _src_api_url | regex_search('api\\.[^.]+\\.(.+):6443', '\\1') | first }}"
 
-    - name: Read source nodeip configuration
-      ansible.builtin.slurp:
-        src: "{{ _deploy }}etc/default/nodeip-configuration"
-      register: _src_nodeip_raw
-      failed_when: false
-
-    - name: Parse source IP from nodeip hint or NM connections
+    - name: Parse source IP from CRI-O nodenet config
       ansible.builtin.shell:
         cmd: |
-          # Try nodeip hint first
-          if [ -f "{{ _deploy }}etc/default/nodeip-configuration" ]; then
-            hint=$(grep KUBELET_NODEIP_HINT "{{ _deploy }}etc/default/nodeip-configuration" | cut -d= -f2)
-            if [ -n "$hint" ]; then
-              # Find NM connections in the hinted subnet
-              for f in {{ _deploy }}etc/NetworkManager/system-connections/*.nmconnection; do
-                [ -f "$f" ] || continue
-                ip=$(grep -oP 'addresses=\K[0-9.]+' "$f" 2>/dev/null || true)
-                if [ -n "$ip" ]; then
-                  echo "$ip"
-                  exit 0
-                fi
-              done
+          # Read CONTAINER_STREAM_ADDRESS from CRI-O nodenet drop-in
+          conf="{{ _deploy }}etc/systemd/system/crio.service.d/20-nodenet.conf"
+          if [ -f "$conf" ]; then
+            ip=$(grep -oP 'CONTAINER_STREAM_ADDRESS=\K[0-9.]+' "$conf")
+            if [ -n "$ip" ]; then
+              echo "$ip"
+              exit 0
             fi
-          fi
-          # Fallback: scan dnsmasq overrides
-          if [ -f "{{ _deploy }}etc/default/sno_dnsmasq_configuration_overrides" ]; then
-            grep SNO_DNSMASQ_IP_OVERRIDE "{{ _deploy }}etc/default/sno_dnsmasq_configuration_overrides" | cut -d= -f2
-            exit 0
           fi
           echo "UNKNOWN"
       register: _src_ip_result
