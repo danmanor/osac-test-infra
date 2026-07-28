@@ -50,12 +50,16 @@
   delay: 10
   changed_when: false
 
-- name: Wait for MCP master to finish updating
-  ansible.builtin.command:
-    cmd: oc wait --for=condition=Updated mcp/master --timeout=900s
+- name: Wait for MCP master to finish updating (tolerates API outage during SNO reboot)
+  ansible.builtin.shell:
+    cmd: oc wait --for=condition=Updated mcp/master --timeout=120s
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
+  register: _mcp_updated
+  until: _mcp_updated.rc == 0
+  retries: 30
+  delay: 60
 
 - name: Wait for node to be Ready after MCP reboot
   ansible.builtin.command:
@@ -63,10 +67,10 @@
   environment:
     KUBECONFIG: /root/.kube/config
   changed_when: false
-  retries: 3
-  delay: 30
   register: _node_ready
   until: _node_ready.rc == 0
+  retries: 5
+  delay: 30
 
 # --- Clone and configure osac-installer ---
 
