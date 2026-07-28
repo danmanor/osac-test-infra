@@ -15,31 +15,6 @@
   changed_when: _submodule_update.stdout | length > 0
   when: not (osac_installer_skip_clone | default(false) | bool)
 
-- name: Patch refresh-after-snapshot.py for snapshot compatibility
-  ansible.builtin.shell:
-    cmd: |
-      cd {{ osac_installer_dir }}/scripts
-      python3 -c "
-      import re
-      p = 'refresh-after-snapshot.py'
-      t = open(p).read()
-      # Remove dead ensure_ca_bundle call
-      t = t.replace(
-          '        (\"ensure CA bundle\", lambda: ensure_ca_bundle(config)),\n', '')
-      # Add certificate.cert-manager.io to adoption resource types
-      t = t.replace(
-          'all,configmap,secret,route',
-          'all,configmap,secret,route,certificate.cert-manager.io')
-      # Delete stale hub-access RoleBinding before helm upgrade
-      if 'hub-access' not in t.split('upgrade_osac')[1].split('helm')[0]:
-          t = t.replace(
-              '    oc(\"delete\", \"secret\", \"config-as-code-ig\"',
-              '    oc(\"delete\", \"rolebinding\", \"hub-access\", \"-n\", config.namespace,\n       \"--ignore-not-found\")\n    oc(\"delete\", \"secret\", \"config-as-code-ig\"')
-      open(p, 'w').write(t)
-      "
-    chdir: "{{ osac_installer_dir }}"
-  changed_when: true
-  when: not (osac_installer_skip_clone | default(false) | bool)
 
 - name: Override osac-operator code in installer
   ansible.builtin.git:
@@ -235,7 +210,7 @@
   retries: 40
   delay: 30
 
-- name: Read Keycloak client secrets, patch realm.json, and ensure K8s secret
+- name: Read existing Keycloak client secrets and patch realm.json (OSAC-2115)
   ansible.builtin.shell:
     cmd: |
       oc port-forward svc/keycloak -n keycloak 18443:443 &
@@ -249,8 +224,6 @@
         | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
       REALM_FILE="{{ osac_installer_dir }}/prerequisites/keycloak/service/files/realm.json"
-      CONTROLLER_SECRET=""
-      ADMIN_SECRET=""
       for CLIENT_ID in osac-controller osac-admin; do
         UUID=$(curl -sk "${KC_URL}/admin/realms/osac/clients?clientId=${CLIENT_ID}" \
           -H "Authorization: Bearer ${TOKEN}" \
@@ -260,45 +233,14 @@
           | python3 -c "import sys,json; print(json.load(sys.stdin)['value'])")
         [ -n "${SECRET}" ] || { echo "ERROR: empty secret for ${CLIENT_ID}" >&2; exit 1; }
         if [ "$CLIENT_ID" = "osac-controller" ]; then
-          CONTROLLER_SECRET="${SECRET}"
           sed -i "s|__OSAC_CONTROLLER_CLIENT_SECRET__|${SECRET}|" "${REALM_FILE}"
         else
-          ADMIN_SECRET="${SECRET}"
           sed -i "s|__OSAC_ADMIN_CLIENT_SECRET__|${SECRET}|" "${REALM_FILE}"
         fi
         echo "Resolved ${CLIENT_ID} secret from Keycloak"
       done
-
-      # Ensure keycloak-client-secrets K8s secret exists (refresh script reads it)
-      oc delete secret keycloak-client-secrets -n keycloak --ignore-not-found
-      oc create secret generic keycloak-client-secrets -n keycloak \
-        --from-literal=osac-controller="${CONTROLLER_SECRET}" \
-        --from-literal=osac-admin="${ADMIN_SECRET}"
-      echo "Created keycloak-client-secrets in keycloak namespace"
   environment:
     KUBECONFIG: /root/.kube/config
-
-- name: Re-adopt postgres-init secret for Helm release rename
-  ansible.builtin.shell:
-    cmd: |
-      if oc get secret postgres-init -n {{ snapshot_osac_namespace }} >/dev/null 2>&1; then
-        oc annotate secret postgres-init -n {{ snapshot_osac_namespace }} \
-          meta.helm.sh/release-name=osac \
-          meta.helm.sh/release-namespace={{ snapshot_osac_namespace }} --overwrite
-        oc label secret postgres-init -n {{ snapshot_osac_namespace }} \
-          app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
-      fi
-  environment:
-    KUBECONFIG: /root/.kube/config
-  changed_when: false
-
-- name: Delete stale console.osac.openshift.io APIService
-  ansible.builtin.shell:
-    cmd: |
-      oc delete apiservice v1alpha1.console.osac.openshift.io --ignore-not-found
-  environment:
-    KUBECONFIG: /root/.kube/config
-  changed_when: false
 
 - name: Report OSAC prep completed
   ansible.builtin.debug:
