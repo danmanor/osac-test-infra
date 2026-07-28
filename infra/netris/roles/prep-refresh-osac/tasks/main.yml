@@ -242,16 +242,6 @@
   environment:
     KUBECONFIG: /root/.kube/config
 
-- name: Wait for cert-manager webhook to be ready
-  ansible.builtin.command:
-    cmd: oc rollout status deploy/cert-manager-webhook -n cert-manager --timeout=300s
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _certmgr_rollout
-  until: _certmgr_rollout.rc == 0
-  retries: 10
-  delay: 15
-
 - name: Report OSAC prep completed
   ansible.builtin.debug:
     msg: "OSAC prep completed — ready for refresh script"

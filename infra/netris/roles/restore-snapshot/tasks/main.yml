@@ -708,6 +708,67 @@
           retries: 10
           delay: 10
 
+# Same recert key-format issue as cluster-proxy-signer above: recert
+# regenerates the cert-manager-webhook-ca self-signed CA key in a format
+# the webhook can't parse ("failed to parse private key (use
+# ParsePKCS8PrivateKey instead)"), causing a permanent readiness probe
+# failure. cert-manager regenerates the secret correctly once deleted.
+- name: Check if cert-manager namespace exists
+  ansible.builtin.command:
+    cmd: oc get namespace cert-manager
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _certmgr_namespace_check
+  changed_when: false
+  failed_when: false
+
+- name: Recover cert-manager webhook from a corrupted CA key
+  when: _certmgr_namespace_check.rc == 0
+  block:
+    - name: Check for cert-manager-webhook readiness failure
+      ansible.builtin.shell:
+        cmd: |
+          oc get pods -n cert-manager -l app.kubernetes.io/component=webhook -o json | python3 -c "
+          import json, sys
+          pods = json.load(sys.stdin)['items']
+          for pod in pods:
+              for cs in pod.get('status', {}).get('containerStatuses', []):
+                  if not cs.get('ready', False):
+                      print('NOT_READY')
+                      sys.exit(0)
+          print('OK')
+          "
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _certmgr_webhook_check
+      changed_when: false
+      failed_when: false
+
+    - name: Delete corrupted cert-manager-webhook-ca secret and restart
+      when: _certmgr_webhook_check.stdout | default('') | trim == 'NOT_READY'
+      block:
+        - name: Delete cert-manager-webhook-ca secret
+          ansible.builtin.command:
+            cmd: oc delete secret cert-manager-webhook-ca -n cert-manager
+          environment:
+            KUBECONFIG: /root/.kube/config
+
+        - name: Restart cert-manager-webhook deployment
+          ansible.builtin.command:
+            cmd: oc rollout restart deployment/cert-manager-webhook -n cert-manager
+          environment:
+            KUBECONFIG: /root/.kube/config
+
+        - name: Wait for cert-manager-webhook rollout
+          ansible.builtin.command:
+            cmd: oc rollout status deployment/cert-manager-webhook -n cert-manager --timeout=300s
+          environment:
+            KUBECONFIG: /root/.kube/config
+          register: _certmgr_rollout
+          until: _certmgr_rollout.rc == 0
+          retries: 2
+          delay: 5
+
 - name: Report cluster status
   ansible.builtin.debug:
     msg: "{{ _co_health.stdout }}"
