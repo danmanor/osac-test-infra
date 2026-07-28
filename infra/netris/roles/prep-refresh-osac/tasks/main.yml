@@ -15,17 +15,6 @@
   changed_when: _submodule_update.stdout | length > 0
   when: not (osac_installer_skip_clone | default(false) | bool)
 
-- name: Cherry-pick upstream fixes for refresh-after-snapshot
-  ansible.builtin.shell:
-    cmd: |
-      git fetch origin fix/config-as-code-ig-helm-conflict
-      git cherry-pick --no-commit b0b2cfb
-    chdir: "{{ osac_installer_dir }}"
-  register: _cherry_pick
-  changed_when: _cherry_pick.rc == 0
-  failed_when: false
-  when: not (osac_installer_skip_clone | default(false) | bool)
-
 - name: Patch refresh-after-snapshot.py for snapshot compatibility
   ansible.builtin.shell:
     cmd: |
