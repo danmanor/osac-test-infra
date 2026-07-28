@@ -553,7 +553,7 @@ jobs:
           # `make test-caas` directly.
           path: |
             ${{ runner.temp }}/test-output/junit.xml
-            infra/netris/logs/
+            ${{ github.workspace }}/infra/netris/logs/
           if-no-files-found: ignore
 
       # Not part of the formal backend contract (infra/contract.md's target
