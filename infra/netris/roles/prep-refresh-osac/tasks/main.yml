@@ -278,6 +278,28 @@
   environment:
     KUBECONFIG: /root/.kube/config
 
+- name: Re-adopt postgres-init secret for Helm release rename
+  ansible.builtin.shell:
+    cmd: |
+      if oc get secret postgres-init -n {{ snapshot_osac_namespace }} >/dev/null 2>&1; then
+        oc annotate secret postgres-init -n {{ snapshot_osac_namespace }} \
+          meta.helm.sh/release-name=osac \
+          meta.helm.sh/release-namespace={{ snapshot_osac_namespace }} --overwrite
+        oc label secret postgres-init -n {{ snapshot_osac_namespace }} \
+          app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
+      fi
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
+- name: Delete stale console.osac.openshift.io APIService
+  ansible.builtin.shell:
+    cmd: |
+      oc delete apiservice v1alpha1.console.osac.openshift.io --ignore-not-found
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+
 - name: Report OSAC prep completed
   ansible.builtin.debug:
     msg: "OSAC prep completed — ready for refresh script"
