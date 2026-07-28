@@ -2,5 +2,16 @@
 - name: Gather infrastructure diagnostics
   hosts: all
   gather_facts: false
+  pre_tasks:
+    - name: Set gather directory
+      ansible.builtin.set_fact:
+        _gather_dir: "{{ playbook_dir }}/../logs"
+
+    - name: Create gather root directory
+      ansible.builtin.file:
+        path: "{{ _gather_dir }}"
+        state: directory
+        mode: "0755"
+      failed_when: false
   roles:
     - gather-infra
