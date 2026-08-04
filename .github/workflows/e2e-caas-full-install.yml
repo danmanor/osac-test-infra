@@ -68,8 +68,10 @@ on:
         description: >-
           JSON array of components to build from source and load onto the cluster, e.g.
           '[{"repo":"osac-project/osac","ref":"my-branch","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"osac-project/osac","ref":"my-branch","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"}]'.
-          Each entry supports repo, ref, imageKey (required), and containerfile
-          (default "Containerfile"), buildType ("containerfile" default, or "ansible-builder").
+          Each entry supports repo, ref, imageKey (required), containerfile
+          (default "Containerfile"), buildType ("containerfile" default, or "ansible-builder"),
+          and context (build context directory relative to repo root; when omitted,
+          defaults to the containerfile's parent directory).
           Empty array (default) builds nothing from source -- use image-overrides for
           pre-built images instead.
         required: false
@@ -311,6 +313,7 @@ jobs:
             file=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].containerfile // \"Containerfile\"")
             image_key=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].imageKey")
             build_type=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].buildType // \"containerfile\"")
+            context=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].context // empty")
 
             tag="localhost/component-${i}-pr:${GITHUB_RUN_ID}"
             src="$RUNNER_TEMP/component-${i}-src"
@@ -322,31 +325,37 @@ jobs:
             # comparing ref strings alone can't prove they're the same commit.
             sha=$(git -C "${src}" rev-parse HEAD)
 
-            # When `file` has a directory component (e.g.
-            # "fulfillment-service/Containerfile" from a monorepo checkout),
-            # everything about this component -- build context, go.mod,
-            # cmd/ -- lives under that subdirectory, not at the checkout
-            # root.
-            build_dir="${src}"
+            # Derive component_dir (for CLI build, CRD discovery) from
+            # the containerfile path, and build_context (for podman build)
+            # from the optional context field.  When context is omitted,
+            # build_context defaults to component_dir (the containerfile's
+            # parent directory), preserving pre-existing behavior.
+            component_dir="${src}"
+            build_context="${src}"
             containerfile_name="${file}"
             if [[ "${file}" == */* ]]; then
-              build_dir="${src}/$(dirname "${file}")"
+              component_dir="${src}/$(dirname "${file}")"
               containerfile_name="$(basename "${file}")"
+            fi
+            if [[ -n "${context}" ]]; then
+              build_context="${src}/${context}"
+            else
+              build_context="${component_dir}"
             fi
 
             if [[ "${build_type}" == "ansible-builder" ]]; then
               python3 -m pip install --quiet 'ansible-builder~=3.0'
-              ansible-builder create --file "${build_dir}/${containerfile_name}" --context "${build_dir}/context"
-              podman build -t "${tag}" -f "${build_dir}/context/Containerfile" "${build_dir}/context"
+              ansible-builder create --file "${component_dir}/${containerfile_name}" --context "${component_dir}/context"
+              podman build -t "${tag}" -f "${component_dir}/context/Containerfile" "${component_dir}/context"
             else
-              podman build -t "${tag}" -f "${build_dir}/${containerfile_name}" "${build_dir}"
+              podman build -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
             fi
 
             # Build OSAC CLI from source when this component is fulfillment-service.
             # Keyed off imageKey (not a repo-name substring), so this works whether
             # repo is fulfillment-service's own repo or a monorepo like osac-project/osac.
             if [[ "${image_key}" == "service.images.service" ]]; then
-              (cd "${build_dir}" && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/osac-cli-bin" ./cmd/osac)
+              (cd "${component_dir}" && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/osac-cli-bin" ./cmd/osac)
               echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
             fi
 
