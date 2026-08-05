@@ -11,7 +11,7 @@
     cmd: >-
       osac create cluster
       --template {{ caas_cluster_template }}
-      --release-image {{ caas_release_image }}
+      --version {{ caas_cluster_version }}
       -f pull_secret={{ pull_secret_path }}
       -f ssh_public_key={{ ssh_public_key_path }}
       --name {{ caas_cluster_name }}
