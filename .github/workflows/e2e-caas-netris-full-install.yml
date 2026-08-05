@@ -328,6 +328,7 @@ jobs:
       # not wanted.
       - name: Install prerequisites and cache images
         shell: bash
+        timeout-minutes: 30
         env:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
         run: make setup-infra INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
@@ -346,6 +347,7 @@ jobs:
 
       - name: Deploy Netris lab
         shell: bash
+        timeout-minutes: 45
         env:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
         run: make deploy-infra INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
@@ -360,6 +362,7 @@ jobs:
       - name: Build and load component images
         if: inputs.components != '[]' && inputs.components != ''
         id: components
+        timeout-minutes: 30
         shell: bash
         env:
           COMPONENTS_JSON: ${{ inputs.components }}
@@ -444,12 +447,14 @@ jobs:
 
       - name: Setup CaaS hosts and catalog
         shell: bash
+        timeout-minutes: 30
         env:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
         run: make setup-suite INFRA=netris SUITE=caas EXTRA_VARS="${EXTRA_VARS}"
 
       - name: Deploy CaaS cluster
         id: deploy-caas
+        timeout-minutes: 90
         shell: bash
         env:
           EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
@@ -464,18 +469,21 @@ jobs:
       - name: Gather infra diagnostics
         if: always()
         shell: bash
+        timeout-minutes: 10
         continue-on-error: true
         run: make gather-infra INFRA=netris
 
       - name: Gather management cluster diagnostics
         if: always()
         shell: bash
+        timeout-minutes: 10
         continue-on-error: true
         run: make -C infra/netris gather-mgmt-cluster
 
       - name: Gather CaaS diagnostics
         if: always()
         shell: bash
+        timeout-minutes: 10
         continue-on-error: true
         run: make gather-suite INFRA=netris SUITE=caas
 
@@ -496,6 +504,7 @@ jobs:
       - name: Cleanup DNS records
         if: always()
         shell: bash
+        timeout-minutes: 5
         continue-on-error: true
         run: make -C infra/netris cleanup-dns
 
