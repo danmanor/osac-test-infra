@@ -51,7 +51,6 @@ concurrency:
 
 jobs:
   e2e-caas-netris:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/e2e-caas-netris-full-install.yml
     with:
       instance-type: ${{ inputs.instance-type || 'c5n.metal' }}
