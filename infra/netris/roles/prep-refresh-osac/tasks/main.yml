@@ -197,6 +197,53 @@
   environment:
     KUBECONFIG: /root/.kube/config
 
+- name: Compute Keycloak external URL for this cluster
+  ansible.builtin.set_fact:
+    _keycloak_external_host: "keycloak-keycloak.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+
+- name: Patch KC_HOSTNAME to match new cluster domain
+  ansible.builtin.shell:
+    cmd: >-
+      oc set env deploy/keycloak-service -n keycloak
+      KC_HOSTNAME=https://{{ _keycloak_external_host }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _kc_patch
+  changed_when: "'updated' in _kc_patch.stdout"
+
+- name: Patch Keycloak TLS certificate dnsNames for new domain
+  ansible.builtin.shell:
+    cmd: |
+      CURRENT=$(oc get certificate keycloak-tls -n keycloak -o jsonpath='{.spec.dnsNames}')
+      if echo "$CURRENT" | grep -q '{{ _keycloak_external_host }}'; then
+        echo "SAN already present"
+      else
+        oc patch certificate keycloak-tls -n keycloak --type=json \
+          -p '[{"op": "add", "path": "/spec/dnsNames/-", "value": "{{ _keycloak_external_host }}"}]'
+        oc delete secret keycloak-tls-cert -n keycloak --ignore-not-found
+        oc wait --for=condition=Ready certificate/keycloak-tls -n keycloak --timeout=120s
+        echo "SAN added and cert reissued"
+      fi
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _cert_patch
+  changed_when: "'reissued' in _cert_patch.stdout"
+
+- name: Wait for Keycloak rollout after KC_HOSTNAME patch
+  ansible.builtin.shell:
+    cmd: oc rollout status deploy/keycloak-service -n keycloak --timeout=300s
+  environment:
+    KUBECONFIG: /root/.kube/config
+  when: _kc_patch is changed
+
+- name: Patch values file with external Keycloak issuer URL
+  ansible.builtin.shell:
+    cmd: |
+      sed -i 's|issuerUrl:.*keycloak.*|issuerUrl: https://{{ _keycloak_external_host }}/realms/osac|' \
+        {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
+      sed -i '/idp:/,/credentials:/{s|url:.*keycloak.*|url: https://{{ _keycloak_external_host }}|}' \
+        {{ osac_installer_dir }}/{{ snapshot_osac_values_file }}
+
 - name: Report OSAC prep completed
   ansible.builtin.debug:
     msg: "OSAC prep completed — ready for refresh script"
