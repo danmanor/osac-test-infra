@@ -268,7 +268,8 @@
       id: "{{ caas_catalog_item }}"
       title: "{{ caas_catalog_item_title }}"
       description: "{{ caas_catalog_item_description }}"
-      template: "{{ caas_cluster_template }}"
+      template:
+        id: "{{ caas_cluster_template }}"
       published: true
       field_definitions:
         - path: "release_image"
