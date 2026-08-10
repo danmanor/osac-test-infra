@@ -157,7 +157,8 @@
       Content-Type: "application/json"
     body_format: json
     body:
-      id: "{{ caas_host_type_id }}"
+      metadata:
+        name: "{{ caas_host_type_id }}"
       title: "{{ caas_host_type_title }}"
       description: "{{ caas_host_type_description }}"
     validate_certs: false
@@ -265,7 +266,8 @@
       Content-Type: "application/json"
     body_format: json
     body:
-      id: "{{ caas_catalog_item }}"
+      metadata:
+        name: "{{ caas_catalog_item }}"
       title: "{{ caas_catalog_item_title }}"
       description: "{{ caas_catalog_item_description }}"
       template:
