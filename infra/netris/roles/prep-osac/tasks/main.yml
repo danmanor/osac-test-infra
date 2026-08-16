@@ -122,10 +122,7 @@
     _values_overrides: >-
       {{ {'cliImage': _ocp_cli_image.stdout | trim,
           'bundledPostgres': {'enabled': true},
-          'lvms': {'enabled': true, 'channel': 'stable-' + ocp_version},
-          'metallb': {'enabled': true},
-          'cnv': {'enabled': true},
-          'mce': {'enabled': true},
+          'lvms': {'channel': 'stable-' + ocp_version},
           'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}},
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
               'NETWORK_CLASS': 'netris',
