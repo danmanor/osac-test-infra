@@ -404,8 +404,8 @@
         id: "{{ _bmi_template.json.id }}"
       published: true
       field_definitions:
-        - path: "ssh_public_key"
-          display_name: "SSH Public Key"
+        - path: "network_attachments"
+          display_name: "Network Attachments"
           editable: true
     validate_certs: false
     status_code: [200, 201, 409]
