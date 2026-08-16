@@ -6,7 +6,7 @@
 
 - name: Check if VirtualNetwork exists
   ansible.builtin.shell:
-    cmd: osac get virtualnetworks -o yaml | grep -q "name: {{ bmaas_vnet_name }}" && echo exists || echo absent
+    cmd: 'osac get virtualnetworks -o yaml | grep -q "name: {{ bmaas_vnet_name }}" && echo exists || echo absent'
   register: _vnet_exists
   changed_when: false
   failed_when: false
@@ -47,7 +47,7 @@
 
 - name: Check if Subnet exists
   ansible.builtin.shell:
-    cmd: osac get subnets -o yaml | grep -q "name: {{ bmaas_subnet_name }}" && echo exists || echo absent
+    cmd: 'osac get subnets -o yaml | grep -q "name: {{ bmaas_subnet_name }}" && echo exists || echo absent'
   register: _subnet_exists
   changed_when: false
   failed_when: false
@@ -88,7 +88,7 @@
 
 - name: Check if SecurityGroup exists
   ansible.builtin.shell:
-    cmd: osac get securitygroups -o yaml | grep -q "name: {{ bmaas_sg_name }}" && echo exists || echo absent
+    cmd: 'osac get securitygroups -o yaml | grep -q "name: {{ bmaas_sg_name }}" && echo exists || echo absent'
   register: _sg_exists
   changed_when: false
   failed_when: false
@@ -136,7 +136,7 @@
 
 - name: Check if BMI already exists
   ansible.builtin.shell:
-    cmd: osac get baremetalinstances -o yaml | grep -q "name: {{ bmaas_bmi_name }}" && echo exists || echo absent
+    cmd: 'osac get baremetalinstances -o yaml | grep -q "name: {{ bmaas_bmi_name }}" && echo exists || echo absent'
   register: _bmi_exists
   changed_when: false
   failed_when: false

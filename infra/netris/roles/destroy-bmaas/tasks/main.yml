@@ -21,7 +21,7 @@
 
 - name: Wait for Subnet deletion
   ansible.builtin.shell:
-    cmd: osac get subnets -o yaml | grep -q "name: {{ bmaas_subnet_name }}" && echo exists || echo gone
+    cmd: 'osac get subnets -o yaml | grep -q "name: {{ bmaas_subnet_name }}" && echo exists || echo gone'
   register: _subnet_gone
   until: _subnet_gone.stdout == 'gone'
   retries: 30
