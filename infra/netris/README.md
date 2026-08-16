@@ -143,6 +143,14 @@ make deploy         # deploy lab + OCP + OSAC (~2-3 hrs)
 make deploy-fast EXTRA_VARS="fulfillment_service_image=quay.io/osac/fulfillment-service:pr-123"
 ```
 
+**Deploy with BMaaS values and image overrides:**
+```bash
+make deploy-ocp
+make deploy-osac OSAC_VALUES_FILE=values/bmaas-ci/values.yaml \
+  EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true"
+make setup-bmaas
+```
+
 **Re-deploy OSAC after code changes:**
 ```bash
 make destroy-osac   # tear down OSAC (keeps OCP and lab)
@@ -355,6 +363,7 @@ make setup-caas EXTRA_VARS="caas_cluster_name=my-cluster caas_discovery_vcpu=8"
 | `fulfillment_service_image` | `""` | fulfillment-service container image override | no |
 | `osac_aap_image` | `""` | osac-aap bootstrap image override | no |
 | `osac_ui_image` | `""` | osac-ui container image override | no |
+| `bmf_operator_image` | `""` | bare-metal-fulfillment-operator container image override | no |
 
 #### Snapshot Deployment (fast path)
 
@@ -381,6 +390,8 @@ make setup-caas EXTRA_VARS="caas_cluster_name=my-cluster caas_discovery_vcpu=8"
 
 All components live in the osac mono-repo. Override `osac_branch` to test a specific branch, and use image variables to override container images.
 
+> **Note**: `OSAC_VALUES_FILE` is a **Make-level** variable (not an Ansible `EXTRA_VARS` key). It controls which Helm values file is used for both `prep-osac` and `run-osac-setup`. Pass it directly to `make`, not inside `EXTRA_VARS`. Default: `values/caas-ci/values.yaml`.
+
 ### Examples
 
 **Test a feature branch:**
@@ -393,4 +404,11 @@ make deploy-osac EXTRA_VARS='{"osac_branch": "feature-x"}'
 ```bash
 make destroy-osac
 make deploy-osac EXTRA_VARS='{"osac_operator_image": "quay.io/osac-project/osac-operator:pr-42", "osac_aap_image": "quay.io/osac-project/osac-aap-ee:pr-99"}'
+```
+
+**Test BMaaS with custom operator images:**
+```bash
+make destroy-osac
+make deploy-osac OSAC_VALUES_FILE=values/bmaas-ci/values.yaml \
+  EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true"
 ```
