@@ -3,11 +3,16 @@
   ansible.builtin.set_fact:
     _gather_dir: "{{ lookup('env', 'ARTIFACT_DIR') | default('/tmp/gather', true) }}"
 
-- name: Create gather subdirectory
+- name: Create gather subdirectories
   ansible.builtin.file:
-    path: "{{ _gather_dir }}/bmaas"
+    path: "{{ _gather_dir }}/bmaas/{{ item }}"
     state: directory
     mode: "0755"
+  loop:
+    - ""
+    - fulfillment-api
+
+# ── Kubernetes resources ──
 
 - name: Gather BMH status
   ansible.builtin.shell:
@@ -24,6 +29,44 @@
     KUBECONFIG: /root/.kube/config
   failed_when: false
   changed_when: false
+
+- name: Gather Provisioning CR
+  ansible.builtin.shell:
+    cmd: oc get provisioning provisioning-configuration -o yaml > {{ _gather_dir }}/bmaas/provisioning-cr.yaml
+  environment:
+    KUBECONFIG: /root/.kube/config
+  failed_when: false
+  changed_when: false
+
+- name: Gather networking resources
+  ansible.builtin.shell:
+    cmd: |
+      oc get virtualnetworks -A -o yaml > {{ _gather_dir }}/bmaas/virtualnetworks.yaml 2>&1
+      oc get subnets -A -o yaml > {{ _gather_dir }}/bmaas/subnets.yaml 2>&1
+      oc get securitygroups -A -o yaml > {{ _gather_dir }}/bmaas/securitygroups.yaml 2>&1
+      oc get externalips -A -o yaml > {{ _gather_dir }}/bmaas/externalips.yaml 2>&1
+      oc get externalipattachments -A -o yaml > {{ _gather_dir }}/bmaas/externalipattachments.yaml 2>&1
+  environment:
+    KUBECONFIG: /root/.kube/config
+  failed_when: false
+  changed_when: false
+
+# ── Namespace inspections ──
+
+- name: Run oc adm inspect on BMaaS-related namespaces
+  ansible.builtin.shell:
+    cmd: >-
+      oc adm inspect
+      ns/{{ bmaas_bmh_namespace }}
+      ns/openshift-machine-api
+      --dest-dir={{ _gather_dir }}/bmaas/inspect
+      2>&1 || echo "inspect failed or cluster unreachable"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+# ── Pod logs ──
 
 - name: Gather Ironic pod logs
   ansible.builtin.shell:
@@ -49,11 +92,67 @@
   failed_when: false
   changed_when: false
 
+- name: Gather osac-operator logs
+  ansible.builtin.shell:
+    cmd: >-
+      oc logs -n {{ osac_namespace }}
+      deployment/osac-operator --tail=500
+      > {{ _gather_dir }}/bmaas/osac-operator-logs.txt 2>&1
+  environment:
+    KUBECONFIG: /root/.kube/config
+  failed_when: false
+  changed_when: false
+
 - name: Gather sushy-tools logs
   ansible.builtin.shell:
     cmd: cp {{ sushy_tools_config_dir }}/sushy.log {{ _gather_dir }}/bmaas/sushy-tools.log 2>/dev/null || true
   failed_when: false
   changed_when: false
+
+# ── AAP job history ──
+
+- name: Gather recent AAP BMaaS job results
+  ansible.builtin.shell:
+    cmd: |
+      TOKEN=$(oc create token -n {{ osac_namespace }} admin 2>/dev/null)
+      AAP_HOST=$(oc get route osac-aap -n {{ osac_namespace }} -o jsonpath='{.status.ingress[0].host}' 2>/dev/null)
+      AAP_PW=$(oc get secret osac-aap-admin-password -n {{ osac_namespace }} -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)
+      if [ -n "$AAP_PW" ] && [ -n "$AAP_HOST" ]; then
+        for tmpl in create-network-attachment delete-network-attachment query-dhcp-lease create-bare-metal-instance delete-bare-metal-instance; do
+          curl -sk -u "admin:$AAP_PW" "https://${AAP_HOST}/api/controller/v2/jobs/?search=$tmpl&order_by=-id&page_size=5" \
+            | python3 -m json.tool > {{ _gather_dir }}/bmaas/aap-jobs-${tmpl}.json 2>/dev/null || true
+        done
+        # Get stdout for the most recent failed job
+        FAILED_ID=$(curl -sk -u "admin:$AAP_PW" "https://${AAP_HOST}/api/controller/v2/jobs/?status=failed&order_by=-id&page_size=1" \
+          | python3 -c 'import sys,json; r=json.load(sys.stdin).get("results",[]); print(r[0]["id"] if r else "")' 2>/dev/null)
+        if [ -n "$FAILED_ID" ]; then
+          curl -sk -u "admin:$AAP_PW" "https://${AAP_HOST}/api/controller/v2/jobs/$FAILED_ID/stdout/?format=txt" \
+            > {{ _gather_dir }}/bmaas/aap-last-failed-job-${FAILED_ID}.txt 2>/dev/null || true
+        fi
+      fi
+  environment:
+    KUBECONFIG: /root/.kube/config
+  failed_when: false
+  changed_when: false
+
+# ── VM state ──
+
+- name: Gather VM state
+  ansible.builtin.shell:
+    cmd: |
+      virsh list --all > {{ _gather_dir }}/bmaas/virsh-list.txt 2>&1
+      for vm in {{ bmaas_vm_patterns | join(' ') }}; do
+        MATCH=$(virsh list --all --name | grep "$vm" | head -1)
+        if [ -n "$MATCH" ]; then
+          echo "=== $MATCH ===" >> {{ _gather_dir }}/bmaas/virsh-domiflist.txt
+          virsh domiflist "$MATCH" >> {{ _gather_dir }}/bmaas/virsh-domiflist.txt 2>&1
+        fi
+      done
+      virsh net-dhcp-leases {{ bmc_net_name }} > {{ _gather_dir }}/bmaas/bmc-net-leases.txt 2>&1 || true
+  failed_when: false
+  changed_when: false
+
+# ── Fulfillment API ──
 
 - name: Gather fulfillment BMI data
   ansible.builtin.shell:
@@ -61,10 +160,13 @@
       TOKEN=$(oc create token -n {{ osac_namespace }} admin 2>/dev/null)
       HOST=$(oc get route fulfillment-internal-api -n {{ osac_namespace }} -o jsonpath='{.status.ingress[0].host}' 2>/dev/null)
       if [ -n "$TOKEN" ] && [ -n "$HOST" ]; then
-        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/host_types" > {{ _gather_dir }}/bmaas/host-types.json 2>/dev/null
-        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_templates" > {{ _gather_dir }}/bmaas/bmi-templates.json 2>/dev/null
-        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_catalog_items" > {{ _gather_dir }}/bmaas/bmi-catalog-items.json 2>/dev/null
-        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instances" | python3 -c 'import sys,json; d=json.load(sys.stdin); [i.pop("template_parameters",None) for i in d.get("items",[])]; json.dump(d,sys.stdout,indent=2)' > {{ _gather_dir }}/bmaas/bmi-instances.json 2>/dev/null
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/host_types" | python3 -m json.tool > {{ _gather_dir }}/bmaas/fulfillment-api/host-types.json 2>/dev/null || true
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_templates" | python3 -m json.tool > {{ _gather_dir }}/bmaas/fulfillment-api/bmi-templates.json 2>/dev/null || true
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_catalog_items" | python3 -m json.tool > {{ _gather_dir }}/bmaas/fulfillment-api/bmi-catalog-items.json 2>/dev/null || true
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instances" \
+          | python3 -c 'import sys,json; d=json.load(sys.stdin); [i.pop("template_parameters",None) for i in d.get("items",[])]; json.dump(d,sys.stdout,indent=2)' \
+          > {{ _gather_dir }}/bmaas/fulfillment-api/bmi-instances.json 2>/dev/null || true
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/network_classes" | python3 -m json.tool > {{ _gather_dir }}/bmaas/fulfillment-api/network-classes.json 2>/dev/null || true
       fi
   environment:
     KUBECONFIG: /root/.kube/config
