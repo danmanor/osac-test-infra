@@ -84,13 +84,10 @@
           '<host mac="{{ _ocp_bmc_mac_new.stdout | trim }}" ip="{{ bmc_net_ocp_ip }}"/>'
           --live --config
 
-    - name: Reconnect OCP NIC to pick up static lease
-      ansible.builtin.shell:
-        cmd: |
-          MAC="{{ _ocp_bmc_mac_new.stdout | trim }}"
-          virsh detach-interface {{ ocp_vm_name_pattern }} network --mac $MAC --live 2>/dev/null || true
-          sleep 2
-          virsh attach-interface {{ ocp_vm_name_pattern }} network {{ bmc_net_name }} --model virtio --mac $MAC --live --config
+    - name: Reboot OCP VM to pick up new NIC via DHCP
+      ansible.builtin.command:
+        cmd: virsh reboot {{ ocp_vm_name_pattern }}
+      changed_when: true
 
 - name: Wait for OCP VM to get bmc-net IP
   ansible.builtin.shell:
