@@ -1,4 +1,42 @@
 ---
+# ── Phase 0: Clean BMaaS networking resources from deploy-bmaas ──
+
+- name: Delete BMI via CLI
+  ansible.builtin.command:
+    cmd: osac delete baremetalinstance {{ bmaas_bmi_name }}
+  failed_when: false
+  changed_when: true
+
+- name: Delete SecurityGroup
+  ansible.builtin.command:
+    cmd: osac delete securitygroup {{ bmaas_sg_name }}
+  failed_when: false
+  changed_when: true
+
+- name: Delete Subnet
+  ansible.builtin.command:
+    cmd: osac delete subnet {{ bmaas_subnet_name }}
+  failed_when: false
+  changed_when: true
+
+- name: Wait for Subnet deletion
+  ansible.builtin.shell:
+    cmd: osac get subnets -o yaml | grep -q "name: {{ bmaas_subnet_name }}" && echo exists || echo gone
+  register: _subnet_gone
+  until: _subnet_gone.stdout == 'gone'
+  retries: 30
+  delay: 5
+  changed_when: false
+  failed_when: false
+
+- name: Delete VirtualNetwork
+  ansible.builtin.command:
+    cmd: osac delete virtualnetwork {{ bmaas_vnet_name }}
+  failed_when: false
+  changed_when: true
+
+# ── Phase 1: Clean BMaaS infrastructure ──
+
 - name: Find BMaaS VMs
   ansible.builtin.shell:
     cmd: virsh list --all --name | grep "{{ item }}"
