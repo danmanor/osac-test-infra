@@ -4,16 +4,7 @@
 # communication, avoiding the br-mgmt VPN route conflict.
 
 # ── Phase 1: BMC network ─────────────────────────────────────────────
-
-- name: Enable libvirt modular daemon sockets
-  ansible.builtin.systemd:
-    name: "{{ item }}"
-    state: started
-    enabled: true
-  loop:
-    - virtqemud.socket
-    - virtstoraged.socket
-    - virtnetworkd.socket
+# Assumes libvirt is already running (prerequisites role handles startup).
 
 - name: Check if bmc-net exists
   ansible.builtin.command:
