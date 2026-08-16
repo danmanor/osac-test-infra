@@ -1,0 +1,204 @@
+---
+# Create networking resources and a BareMetalInstance, then wait for
+# it to reach Ready or fail. Mirrors create-caas for BMaaS.
+
+# ── Phase 1: Networking resources ──
+
+- name: Check if VirtualNetwork exists
+  ansible.builtin.shell:
+    cmd: osac get virtualnetworks -o yaml | grep -q "name: {{ bmaas_vnet_name }}" && echo exists || echo absent
+  register: _vnet_exists
+  changed_when: false
+  failed_when: false
+
+- name: Create VirtualNetwork
+  ansible.builtin.command:
+    cmd: >-
+      osac create virtualnetwork
+      --name {{ bmaas_vnet_name }}
+      --network-class {{ bmaas_network_class }}
+      --ipv4-cidr {{ bmaas_vnet_cidr }}
+  when: _vnet_exists.stdout != 'exists'
+  register: _vnet_create
+  changed_when: true
+
+- name: Get VirtualNetwork ID
+  ansible.builtin.shell:
+    cmd: >-
+      osac get virtualnetworks -o yaml
+      | python3 -c "import sys,yaml;
+      data=yaml.safe_load(sys.stdin);
+      items=data if isinstance(data,list) else [data];
+      print(next(i['id'] for i in items if i.get('metadata',{}).get('name','')=='{{ bmaas_vnet_name }}'))"
+  register: _vnet_id
+  changed_when: false
+
+- name: Wait for VirtualNetwork READY
+  ansible.builtin.shell:
+    cmd: >-
+      osac get virtualnetwork {{ _vnet_id.stdout }} -o yaml
+      | grep -oP 'state:\s+\K\S+'
+    executable: /bin/bash
+  register: _vnet_state
+  until: "'READY' in _vnet_state.stdout"
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Check if Subnet exists
+  ansible.builtin.shell:
+    cmd: osac get subnets -o yaml | grep -q "name: {{ bmaas_subnet_name }}" && echo exists || echo absent
+  register: _subnet_exists
+  changed_when: false
+  failed_when: false
+
+- name: Create Subnet
+  ansible.builtin.command:
+    cmd: >-
+      osac create subnet
+      --name {{ bmaas_subnet_name }}
+      --virtual-network {{ _vnet_id.stdout }}
+      --ipv4-cidr {{ bmaas_vnet_cidr }}
+  when: _subnet_exists.stdout != 'exists'
+  register: _subnet_create
+  changed_when: true
+
+- name: Get Subnet ID
+  ansible.builtin.shell:
+    cmd: >-
+      osac get subnets -o yaml
+      | python3 -c "import sys,yaml;
+      data=yaml.safe_load(sys.stdin);
+      items=data if isinstance(data,list) else [data];
+      print(next(i['id'] for i in items if i.get('metadata',{}).get('name','')=='{{ bmaas_subnet_name }}'))"
+  register: _subnet_id
+  changed_when: false
+
+- name: Wait for Subnet READY
+  ansible.builtin.shell:
+    cmd: >-
+      osac get subnet {{ _subnet_id.stdout }} -o yaml
+      | grep -oP 'state:\s+\K\S+'
+    executable: /bin/bash
+  register: _subnet_state
+  until: "'READY' in _subnet_state.stdout"
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Check if SecurityGroup exists
+  ansible.builtin.shell:
+    cmd: osac get securitygroups -o yaml | grep -q "name: {{ bmaas_sg_name }}" && echo exists || echo absent
+  register: _sg_exists
+  changed_when: false
+  failed_when: false
+
+- name: Create SecurityGroup
+  ansible.builtin.command:
+    cmd: >-
+      osac create securitygroup
+      --name {{ bmaas_sg_name }}
+      --virtual-network {{ _vnet_id.stdout }}
+  when: _sg_exists.stdout != 'exists'
+  register: _sg_create
+  changed_when: true
+
+- name: Get SecurityGroup ID
+  ansible.builtin.shell:
+    cmd: >-
+      osac get securitygroups -o yaml
+      | python3 -c "import sys,yaml;
+      data=yaml.safe_load(sys.stdin);
+      items=data if isinstance(data,list) else [data];
+      print(next(i['id'] for i in items if i.get('metadata',{}).get('name','')=='{{ bmaas_sg_name }}'))"
+  register: _sg_id
+  changed_when: false
+
+- name: Wait for SecurityGroup READY
+  ansible.builtin.shell:
+    cmd: >-
+      osac get securitygroup {{ _sg_id.stdout }} -o yaml
+      | grep -oP 'state:\s+\K\S+'
+    executable: /bin/bash
+  register: _sg_state
+  until: "'READY' in _sg_state.stdout"
+  retries: 20
+  delay: 10
+  changed_when: false
+
+- name: Report networking ready
+  ansible.builtin.debug:
+    msg: >-
+      Networking ready: VNet={{ _vnet_id.stdout }},
+      Subnet={{ _subnet_id.stdout }}, SG={{ _sg_id.stdout }}
+
+# ── Phase 2: Create BareMetalInstance ──
+
+- name: Check if BMI already exists
+  ansible.builtin.shell:
+    cmd: osac get baremetalinstances -o yaml | grep -q "name: {{ bmaas_bmi_name }}" && echo exists || echo absent
+  register: _bmi_exists
+  changed_when: false
+  failed_when: false
+
+- name: Get catalog item ID
+  ansible.builtin.shell:
+    cmd: >-
+      osac get baremetalinstancecatalogitems -o yaml
+      | python3 -c "import sys,yaml;
+      data=yaml.safe_load(sys.stdin);
+      items=data if isinstance(data,list) else [data];
+      matches=[i for i in items if i.get('metadata',{}).get('name','')=='{{ bmaas_catalog_item }}'];
+      print(matches[0]['id'] if matches else '')"
+  register: _catalog_id
+  changed_when: false
+
+- name: Create BareMetalInstance
+  ansible.builtin.command:
+    cmd: >-
+      osac create baremetalinstance
+      --catalog-item {{ _catalog_id.stdout }}
+      --name {{ bmaas_bmi_name }}
+      --network-attachment subnet={{ _subnet_id.stdout }},interface={{ bmaas_bmi_interface }},primary,security-groups={{ _sg_id.stdout }}
+  when: _bmi_exists.stdout != 'exists'
+  register: _bmi_create
+  changed_when: true
+
+- name: Extract BMI ID
+  ansible.builtin.shell:
+    cmd: >-
+      osac get baremetalinstances -o yaml
+      | python3 -c "import sys,yaml;
+      data=yaml.safe_load(sys.stdin);
+      items=data if isinstance(data,list) else [data];
+      print(next(i['id'] for i in items if i.get('metadata',{}).get('name','')=='{{ bmaas_bmi_name }}'))"
+  register: _bmi_id
+  changed_when: false
+
+- name: Report BMI creation
+  ansible.builtin.debug:
+    msg: "BareMetalInstance '{{ bmaas_bmi_name }}' {{ 'created' if _bmi_create is not skipped else 'already exists' }} with ID {{ _bmi_id.stdout }}"
+
+# ── Phase 3: Wait for BMI ──
+
+- name: Wait for BMI to reach final state
+  ansible.builtin.shell:
+    cmd: |
+      STATE=$(osac get baremetalinstance {{ _bmi_id.stdout }} -o yaml | grep -m1 'state:' | awk '{print $2}')
+      echo "$STATE"
+      if echo "$STATE" | grep -q "FAILED"; then exit 2; fi
+  register: _bmi_state
+  until: "'RUNNING' in _bmi_state.stdout or 'READY' in _bmi_state.stdout"
+  retries: 120
+  delay: 30
+  failed_when: _bmi_state.rc == 2
+  changed_when: false
+
+- name: Fail if BMI ended in FAILED state
+  ansible.builtin.fail:
+    msg: "BareMetalInstance '{{ bmaas_bmi_name }}' ({{ _bmi_id.stdout }}) is in FAILED state"
+  when: "'FAILED' in _bmi_state.stdout"
+
+- name: Report BMI ready
+  ansible.builtin.debug:
+    msg: "BareMetalInstance '{{ bmaas_bmi_name }}' ({{ _bmi_id.stdout }}) is READY"

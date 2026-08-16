@@ -102,6 +102,15 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | `make setup-caas` | Discover hosts, label agents, register host type, configure osac CLI | ~30 min |
 | `make deploy-caas` | Create CaaS cluster using `ocp_ci_small` template | ~60 min |
 
+### BMaaS (run after deploy with `OSAC_VALUES_FILE=values/bmaas-ci/values.yaml`)
+
+| Target | Description | Time |
+|--------|-------------|------|
+| `make setup-bmaas` | Repurpose HGX VMs as virtual BMHs, create BMH CRs, register host type + catalog item | ~10 min |
+| `make deploy-bmaas` | Create networking (VNet, Subnet, SG) + BMI with network attachment, wait for Ready | ~15 min |
+| `make destroy-bmaas` | Delete BMH CRs, secrets, Provisioning CR, shut down VMs, remove disks | ~1 min |
+| `make gather-bmaas` | Gather BMaaS diagnostics (BMH, BMI, Ironic, BMF, AAP jobs, networking, VM state) | ~1 min |
+
 ### Destroy
 
 | Target | Description |
@@ -111,6 +120,7 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | `make destroy-ocp` | Reset OCP for reinstall: delete cluster, recreate disk, boot VM |
 | `make destroy-infra` | Tear down netris-lab (VMs, K3s, topology) |
 | `make destroy-caas` | CaaS teardown: stop discovery VMs, remove disks/ISO, delete namespace, clean DNS |
+| `make destroy-bmaas` | BMaaS teardown: delete BMHs, secrets, Provisioning CR, shut down VMs |
 
 ### Recovery and Utilities
 
@@ -164,6 +174,12 @@ make connectivity   # re-runs VPN, socat, ISP FRR, softgate agents
 ```bash
 make setup-caas     # discover hosts, label agents, register host type
 make deploy-caas    # create cluster
+```
+
+**Deploy BMaaS after OSAC is up:**
+```bash
+make setup-bmaas    # repurpose HGX VMs as virtual BMHs, register in fulfillment
+make deploy-bmaas   # create networking + BMI, wait for provisioning
 ```
 
 **Rebuild from scratch:**

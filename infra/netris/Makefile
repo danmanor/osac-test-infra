@@ -90,6 +90,9 @@ setup-bmc:
 setup-bmaas:
 	ansible-playbook playbooks/setup-bmaas.yml $(ANSIBLE_EXTRA)
 
+deploy-bmaas:
+	ansible-playbook playbooks/deploy-bmaas.yml $(ANSIBLE_EXTRA)
+
 destroy-bmaas:
 	ansible-playbook playbooks/destroy-bmaas.yml $(ANSIBLE_EXTRA)
 
@@ -183,7 +186,7 @@ health-check:
         setup-caas deploy-caas \
         destroy-osac destroy-ocp destroy-infra destroy-caas destroy-full \
         gather-infra gather-mgmt-cluster gather-caas \
-        setup-bmc setup-bmaas destroy-bmaas gather-bmaas \
+        setup-bmc setup-bmaas deploy-bmaas destroy-bmaas gather-bmaas \
         install-osac prep-osac run-osac-setup post-osac \
         refresh-osac prep-refresh-osac run-refresh-osac post-refresh-osac \
         connectivity vendor-update lint cleanup-dns \

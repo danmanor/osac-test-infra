@@ -1,0 +1,6 @@
+---
+- name: Deploy BMaaS test instance with networking
+  hosts: all
+  gather_facts: false
+  roles:
+    - deploy-bmaas
