@@ -194,6 +194,10 @@
                'pullPolicy': ('IfNotPresent' if bmf_operator_image.startswith('localhost/') else 'Always')
              }}}
                     if bmf_operator_image | default('') | length > 0 else {}), recursive=true)
+         | combine(({'aap': {'configAsCode': {'projectGitUri': aap_project_git_uri}}}
+                    if aap_project_git_uri | default('') | length > 0 else {}), recursive=true)
+         | combine(({'aap': {'configAsCode': {'projectGitBranch': aap_project_git_branch}}}
+                    if aap_project_git_branch | default('') | length > 0 else {}), recursive=true)
       }}
 
 - name: Write patched values file

@@ -59,6 +59,13 @@ osac_aap_image: ""
 osac_ui_image: ""
 bmf_operator_image: ""
 
+# AAP config-as-code project git overrides (leave empty to use installer defaults).
+# Point AAP at a PR branch to test osac-aap playbook/collection changes; the
+# mono-repo clone (osac_branch) only controls the installer Helm charts, not
+# where AAP syncs its playbooks from at runtime.
+aap_project_git_uri: ""
+aap_project_git_branch: ""
+
 # Snapshot-based deployment (fast path)
 # Deploy mode: "fresh" (OCP-only snapshot + Helm install) or
 # "snapshot" (CaaS snapshot with baked OSAC + refresh)

@@ -153,9 +153,15 @@ make deploy-fast EXTRA_VARS="fulfillment_service_image=quay.io/osac/fulfillment-
 ```bash
 make deploy-ocp
 make deploy-osac OSAC_VALUES_FILE=values/bmaas-ci/values.yaml \
-  EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true"
+  EXTRA_VARS="osac_operator_image=quay.io/dmanor/osac-operator:tag bmf_operator_image=quay.io/dmanor/bare-metal-fulfillment-operator:tag bare_metal_services=true aap_project_git_branch=my-feature-branch"
 make setup-bmaas
 ```
+
+> `aap_project_git_branch` (and `aap_project_git_uri`) point the AAP config-as-code project
+> at a specific branch, so AAP syncs osac-aap playbooks/collections from that branch at
+> runtime. This is separate from `osac_branch`, which only controls the mono-repo clone used
+> for the installer Helm charts — to fully test a PR whose changes include osac-aap Ansible,
+> set both `osac_branch` and `aap_project_git_branch` to the PR branch.
 
 **Re-deploy OSAC after code changes:**
 ```bash
@@ -411,6 +417,8 @@ dns_server: "10.0.0.1"
 | `osac_aap_image` | `""` | osac-aap bootstrap image override | no |
 | `osac_ui_image` | `""` | osac-ui container image override | no |
 | `bmf_operator_image` | `""` | bare-metal-fulfillment-operator container image override | no |
+| `aap_project_git_uri` | `""` | AAP config-as-code project git URI override (defaults to installer value) | no |
+| `aap_project_git_branch` | `""` | AAP config-as-code project git branch override (test PR playbooks/collections) | no |
 
 #### Snapshot Deployment (fast path)
 
