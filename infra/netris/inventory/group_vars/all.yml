@@ -27,6 +27,13 @@ ocp_server_ports:
 ocp_snat_ip: "198.51.100.1"
 ocp_dnat_ip: "198.51.100.2"
 
+# OSAC tenant ExternalIPPool CIDR. The host routes this toward the softgate/ISP
+# (see deploy-infra) so tenant ExternalIPs are reachable. Must not overlap the
+# mgmt pools (nat_cidr 198.51.100.0/29, bgp_link 198.51.100.8/29,
+# l4lb 198.51.100.16/29). OSAC creates the Netris allocation itself when a
+# tenant ExternalIP is requested; the lab only prepares host routing/masquerade.
+osac_external_ip_pool_cidr: "198.51.100.24/29"
+
 # Configuration file (INI format, optional — values fall back to env vars)
 config_path: "{{ inventory_dir }}/../config"
 

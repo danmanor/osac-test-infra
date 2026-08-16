@@ -383,6 +383,7 @@ make setup-maas MAAS_DISCOVERY_MEMORY_MB=49152
 | `ocp_node_ip` | `192.168.40.2` | OCP node static IP | defaults only |
 | `ocp_snat_ip` | `198.51.100.1` | SNAT translated IP | defaults only |
 | `ocp_dnat_ip` | `198.51.100.2` | DNAT IP for API/apps access | defaults only |
+| `osac_external_ip_pool_cidr` | `198.51.100.24/29` | OSAC tenant ExternalIPPool CIDR; host routes/masquerades it toward the softgate. Must not overlap the mgmt nat/l4lb/bgp pools. OSAC creates the Netris allocation itself. | defaults only |
 | `netris_username` | `netris` | Netris API username | defaults only |
 | `netris_password` | `netris` | Netris API password | defaults only |
 | `dns_server` | `8.8.8.8` | Upstream DNS server threaded through cloud-init, Netris topology, dnsmasq/DHCP, and the OCP NMState resolver. Override in environments where public DNS (8.8.8.8, 1.1.1.1) is unreachable | yes |
