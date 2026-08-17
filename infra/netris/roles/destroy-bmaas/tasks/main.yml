@@ -1,4 +1,114 @@
 ---
+# destroy-bmaas is the exact inverse of setup-bmaas: it undoes everything
+# setup-bmaas creates, and nothing it doesn't. In particular it does NOT touch
+# osac-inventory-config / osac-management-config (those are created by prep-osac,
+# not setup-bmaas) and does NOT remove the shared osac CLI config
+# (/root/.config/osac/config.json), which is a generic CLI convenience, not a
+# BMaaS resource. Teardown runs in reverse order of creation: fulfillment-service
+# API resources first, then BMHs/secrets/namespace, then the Provisioning CR,
+# then the virtual BMH VMs and their disks.
+
+# ── Phase 1: Fulfillment-service API teardown (reverse of setup Phase 7) ──
+# Skipped gracefully if the fulfillment route is absent (e.g. osac already gone).
+- name: Look up fulfillment internal API route
+  ansible.builtin.command:
+    cmd: oc get route fulfillment-internal-api -n {{ osac_namespace }} -o jsonpath='{.status.ingress[0].host}'
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _fulfillment_host
+  changed_when: false
+  failed_when: false
+
+- name: Tear down fulfillment API resources
+  when: _fulfillment_host.rc == 0 and (_fulfillment_host.stdout | length > 0)
+  block:
+    - name: Set fulfillment API URL
+      ansible.builtin.set_fact:
+        _fulfillment_api: "https://{{ _fulfillment_host.stdout }}"
+
+    - name: Get service account token
+      ansible.builtin.command:
+        cmd: oc create token -n {{ osac_namespace }} admin
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: _sa_token
+      changed_when: false
+
+    # Delete BMI catalog item (reverse of setup "Create BMI catalog item").
+    # Resources are addressed by id; setup created it by metadata.name, so
+    # resolve the id from the list first.
+    - name: List BMI catalog items
+      ansible.builtin.uri:
+        url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_catalog_items"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ _sa_token.stdout }}"
+        validate_certs: false
+        status_code: [200]
+      register: _ci_list
+
+    - name: Resolve catalog item id
+      ansible.builtin.set_fact:
+        _ci_id: >-
+          {{ (_ci_list.json.items | default([])
+              | selectattr('metadata.name', 'equalto', bmaas_catalog_item)
+              | map(attribute='id') | list | first) | default('') }}
+
+    - name: Delete BMI catalog item
+      ansible.builtin.uri:
+        url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_catalog_items/{{ _ci_id }}"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ _sa_token.stdout }}"
+        validate_certs: false
+        status_code: [200, 204, 404]
+      when: _ci_id | length > 0
+
+    # Unlink the template from the host type (reverse of setup "Link BMI
+    # template to host type"). Must happen before deleting the host type.
+    - name: Unlink BMI template from host type
+      ansible.builtin.uri:
+        url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=host_type"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ _sa_token.stdout }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          id: "{{ bmaas_bmi_template }}"
+          host_type: ""
+        validate_certs: false
+        status_code: [200, 404]
+
+    # Delete host type (reverse of setup "Create host type").
+    - name: List host types
+      ansible.builtin.uri:
+        url: "{{ _fulfillment_api }}/api/private/v1/host_types"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ _sa_token.stdout }}"
+        validate_certs: false
+        status_code: [200]
+      register: _ht_list
+
+    - name: Resolve host type id
+      ansible.builtin.set_fact:
+        _ht_id: >-
+          {{ (_ht_list.json.items | default([])
+              | selectattr('metadata.name', 'equalto', bmaas_host_type)
+              | map(attribute='id') | list | first) | default('') }}
+
+    - name: Delete host type
+      ansible.builtin.uri:
+        url: "{{ _fulfillment_api }}/api/private/v1/host_types/{{ _ht_id }}"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ _sa_token.stdout }}"
+        validate_certs: false
+        status_code: [200, 204, 404]
+      when: _ht_id | length > 0
+
+# ── Discover the virtual BMH VMs (shared by the phases below) ──
 - name: Find BMaaS VMs
   ansible.builtin.shell:
     cmd: virsh list --all --name | grep "{{ item }}"
@@ -11,13 +121,35 @@
   ansible.builtin.set_fact:
     bmaas_vms: "{{ _bmaas_vm_lookup.results | selectattr('stdout', 'ne', '') | map(attribute='stdout_lines') | map('first') | list }}"
 
-- name: Delete BareMetalHost CRs
+# ── Phase 2: BMHs, secrets, namespace (reverse of setup Phases 3–5) ──
+# Delete BMH CRs and wait for Metal3 to deprovision (host still powered on so
+# IPA can run). Force-clear finalizers on anything that gets stuck so teardown
+# always completes.
+- name: Delete BareMetalHost CRs (wait for deprovision)
   ansible.builtin.command:
-    cmd: oc delete bmh {{ item }} -n {{ bmaas_bmh_namespace }} --ignore-not-found
+    cmd: oc delete bmh {{ item }} -n {{ bmaas_bmh_namespace }} --ignore-not-found --wait=true --timeout=600s
   environment:
     KUBECONFIG: /root/.kube/config
   loop: "{{ bmaas_vms }}"
-  changed_when: true
+  register: _bmh_delete
+  failed_when: false
+  changed_when: "'deleted' in _bmh_delete.stdout"
+
+- name: Force-clear finalizers on any lingering BareMetalHost
+  ansible.builtin.shell:
+    cmd: |
+      if oc get bmh {{ item }} -n {{ bmaas_bmh_namespace }} >/dev/null 2>&1; then
+        oc patch bmh {{ item }} -n {{ bmaas_bmh_namespace }} --type=merge \
+          -p '{"metadata":{"finalizers":[]}}'
+        echo "force-cleared"
+      else
+        echo "gone"
+      fi
+  environment:
+    KUBECONFIG: /root/.kube/config
+  loop: "{{ bmaas_vms }}"
+  register: _bmh_finalizer
+  changed_when: "'force-cleared' in _bmh_finalizer.stdout"
 
 - name: Delete BMC credential secrets
   ansible.builtin.command:
@@ -27,16 +159,14 @@
   loop: "{{ bmaas_vms }}"
   changed_when: true
 
-- name: Delete BMF config secrets
+- name: Delete BMH namespace
   ansible.builtin.command:
-    cmd: oc delete secret {{ item }} -n {{ osac_namespace }} --ignore-not-found
+    cmd: oc delete namespace {{ bmaas_bmh_namespace }} --ignore-not-found
   environment:
     KUBECONFIG: /root/.kube/config
-  loop:
-    - osac-inventory-config
-    - osac-management-config
   changed_when: true
 
+# ── Phase 3: Provisioning CR (reverse of setup Phase 1) ──
 - name: Delete Provisioning CR
   ansible.builtin.command:
     cmd: oc delete provisioning provisioning-configuration --ignore-not-found
@@ -44,6 +174,7 @@
     KUBECONFIG: /root/.kube/config
   changed_when: true
 
+# ── Phase 4: Virtual BMH VMs and disks (reverse of setup Phase 2) ──
 - name: Shut down BMaaS VMs
   ansible.builtin.command:
     cmd: virsh destroy {{ item }}
@@ -56,10 +187,3 @@
     path: "{{ sushy_tools_disk_dir }}/{{ item }}-disk.qcow2"
     state: absent
   loop: "{{ bmaas_vms }}"
-
-- name: Delete BMH namespace
-  ansible.builtin.command:
-    cmd: oc delete namespace {{ bmaas_bmh_namespace }} --ignore-not-found
-  environment:
-    KUBECONFIG: /root/.kube/config
-  changed_when: true
