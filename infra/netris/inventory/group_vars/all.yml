@@ -185,6 +185,21 @@ bmaas_bmh_namespace: "host-inventory"
 bmaas_host_type: "default"
 bmaas_host_type_title: "Default Bare Metal Host"
 bmaas_host_type_description: "CI bare metal host type for BMaaS testing"
+# Physical network interfaces of the BM host type. Tenants select an interface
+# by name in the BMI network attachment; the fulfillment-service validates the
+# name against this list (for templates that set host_type). Roles: fabric =
+# tenant east-west data, lifecycle = PXE/BMC (not tenant-attachable). eth9 is
+# the tenant data NIC on the sim-lab BMH VMs (see the Netris V-Net port).
+bmaas_host_type_interfaces:
+  - name: eth9
+    role: fabric
+    description: "Tenant data interface (100GbE)"
+  - name: eth10
+    role: fabric
+    description: "Ultra-fast storage / AI workload interface (400GbE RoCE)"
+  - name: eth0
+    role: lifecycle
+    description: "PXE/BMC provisioning interface"
 bmaas_bmi_template: "osac.templates.bm_host_provisioning"
 bmaas_catalog_item: "ci-bm-default"
 bmaas_catalog_item_title: "CI Default Bare Metal Instance"

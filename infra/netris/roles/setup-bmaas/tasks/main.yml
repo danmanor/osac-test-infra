@@ -371,6 +371,7 @@
         name: "{{ bmaas_host_type }}"
       title: "{{ bmaas_host_type_title }}"
       description: "{{ bmaas_host_type_description }}"
+      interfaces: "{{ bmaas_host_type_interfaces }}"
     validate_certs: false
     status_code: [200, 201, 409]
 
@@ -386,6 +387,23 @@
   until: _bmi_template.status == 200
   retries: 40
   delay: 15
+
+# The published template has no host_type, so the fulfillment-service skips
+# interface validation for BMIs created from it. Link it to the host type so the
+# tenant's network-attachment interface is validated against the interfaces list.
+- name: Link BMI template to host type
+  ansible.builtin.uri:
+    url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}?update_mask=host_type"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id: "{{ bmaas_bmi_template }}"
+      host_type: "{{ bmaas_host_type }}"
+    validate_certs: false
+    status_code: [200]
 
 - name: Create BMI catalog item
   ansible.builtin.uri:
