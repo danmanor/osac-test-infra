@@ -401,6 +401,26 @@
     validate_certs: false
     status_code: [200, 201, 409]
 
+# The template's host_type must be the host type's ID, not its name — the
+# fulfillment-service resolves it as an ID at BMI-create time (host_type by
+# name yields "host type 'default' ... not found"). Look it up by name.
+- name: List host types
+  ansible.builtin.uri:
+    url: "{{ _fulfillment_api }}/api/private/v1/host_types"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+    validate_certs: false
+    status_code: [200]
+  register: _host_types
+
+- name: Resolve host type id
+  ansible.builtin.set_fact:
+    _host_type_id: >-
+      {{ (_host_types.json.get('items', [])
+          | selectattr('metadata.name', 'equalto', bmaas_host_type)
+          | map(attribute='id') | list | first) }}
+
 - name: Wait for BMI template to be published by AAP
   ansible.builtin.uri:
     url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_templates/{{ bmaas_bmi_template }}"
@@ -427,7 +447,7 @@
     body_format: json
     body:
       id: "{{ bmaas_bmi_template }}"
-      host_type: "{{ bmaas_host_type }}"
+      host_type: "{{ _host_type_id }}"
     validate_certs: false
     status_code: [200]
 
@@ -450,6 +470,9 @@
       field_definitions:
         - path: "ssh_public_key"
           display_name: "SSH Public Key"
+          editable: true
+        - path: "network_attachments"
+          display_name: "Network Attachments"
           editable: true
     validate_certs: false
     status_code: [200, 201, 409]
