@@ -38,13 +38,16 @@
         content: |
           <network>
             <name>{{ bmc_net_name }}</name>
-            <!-- route mode (no NAT) so libvirt advertises {{ bmc_net_host_ip }} as the
-                 default gateway via DHCP. IPA/ironic-agent requires a default route for
-                 network-online.target to complete during inspection; the mgmt NIC no
-                 longer supplies one (it must stay gateway-less so the provisioned tenant
-                 BMI defaults out its tenant NIC). The gateway is used only to satisfy
-                 network-online — Ironic itself is reached on the connected subnet. -->
-            <forward mode="route"/>
+            <!-- nat mode: libvirt advertises {{ bmc_net_host_ip }} as the default
+                 gateway via DHCP AND masquerades bmc-net egress to the internet. The
+                 OpenShift IPA runs ironic-agent as a podman container pulled from
+                 quay.io at inspection time, so the inspection ramdisk needs real
+                 internet egress (not just a default route). The mgmt NIC is kept
+                 gateway-less (so a provisioned tenant BMI defaults out its tenant NIC),
+                 so bmc-net must supply both the default route and the NAT egress.
+                 Without it the agent image pull times out and inspection hangs in
+                 "inspect wait". -->
+            <forward mode="nat"/>
             <bridge name="{{ bmc_net_bridge }}"/>
             <ip address="{{ bmc_net_host_ip }}" netmask="255.255.255.0">
               <dhcp>
