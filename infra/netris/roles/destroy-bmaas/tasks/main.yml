@@ -50,7 +50,7 @@
     - name: Resolve catalog item id
       ansible.builtin.set_fact:
         _ci_id: >-
-          {{ (_ci_list.json.items | default([])
+          {{ (_ci_list.json.get('items', [])
               | selectattr('metadata.name', 'equalto', bmaas_catalog_item)
               | map(attribute='id') | list | first) | default('') }}
 
@@ -94,7 +94,7 @@
     - name: Resolve host type id
       ansible.builtin.set_fact:
         _ht_id: >-
-          {{ (_ht_list.json.items | default([])
+          {{ (_ht_list.json.get('items', [])
               | selectattr('metadata.name', 'equalto', bmaas_host_type)
               | map(attribute='id') | list | first) | default('') }}
 
