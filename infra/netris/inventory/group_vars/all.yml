@@ -178,6 +178,7 @@ sushy_tools_storage_pool: "bmh-disks"
 bmaas_vm_patterns:
   - "hgx-pod00-su0-h01"
   - "hgx-pod00-su0-h02"
+  - "hgx-pod00-su0-h03"
 bmaas_vm_vcpu: 4
 bmaas_vm_memory_mb: 8192
 bmaas_vm_disk_gb: 50
