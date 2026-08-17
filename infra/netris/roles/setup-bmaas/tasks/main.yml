@@ -236,6 +236,26 @@
   changed_when: false
   loop: "{{ bmaas_vms }}"
 
+# The tenant data interfaces (eth9, eth10, ...) are the Netris fabric NICs,
+# which appear as the "udp"-type interfaces in domiflist, in order. This is a
+# DIFFERENT MAC than bootMACAddress (the bmc-net NIC) — the DHCP lease the
+# operator's IP-discovery matches against is on the fabric NIC, not the boot
+# NIC. Order matches bmaas_host_type_interfaces' non-lifecycle entries:
+# 1st udp NIC = eth9, 2nd = eth10, ...
+- name: Get VM tenant fabric NIC MACs (Netris udp NICs, ordered)
+  ansible.builtin.shell:
+    cmd: virsh domiflist {{ item }} | awk '$2=="udp"{print $5}'
+  register: _vm_fabric_macs
+  changed_when: false
+  loop: "{{ bmaas_vms }}"
+
+- name: Compute tenant (non-lifecycle) host type interface names
+  ansible.builtin.set_fact:
+    _tenant_iface_names: >-
+      {{ bmaas_host_type_interfaces
+         | rejectattr('role', 'equalto', 'lifecycle')
+         | map(attribute='name') | list }}
+
 - name: Create BMC credential secrets
   ansible.builtin.shell:
     cmd: |
@@ -265,6 +285,12 @@
       metadata:
         name: {{ item }}
         namespace: {{ bmaas_bmh_namespace }}
+        annotations:
+          # Map each tenant data interface (eth9, eth10, role: fabric) to its
+          # Netris fabric NIC MAC so the operator's IP-discovery job matches the
+          # DHCP lease by MAC. These are the "udp"-type NICs (not bootMACAddress,
+          # which is the bmc-net NIC). Names come from bmaas_host_type_interfaces.
+          osac.openshift.io/interface-macs: '{{ dict(_tenant_iface_names | zip(_vm_fabric_macs.results[idx].stdout_lines)) | to_json }}'
       spec:
         online: true
         bootMACAddress: "{{ _vm_macs.results[idx].stdout | trim }}"
