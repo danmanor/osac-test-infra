@@ -38,6 +38,13 @@
         content: |
           <network>
             <name>{{ bmc_net_name }}</name>
+            <!-- route mode (no NAT) so libvirt advertises {{ bmc_net_host_ip }} as the
+                 default gateway via DHCP. IPA/ironic-agent requires a default route for
+                 network-online.target to complete during inspection; the mgmt NIC no
+                 longer supplies one (it must stay gateway-less so the provisioned tenant
+                 BMI defaults out its tenant NIC). The gateway is used only to satisfy
+                 network-online — Ironic itself is reached on the connected subnet. -->
+            <forward mode="route"/>
             <bridge name="{{ bmc_net_bridge }}"/>
             <ip address="{{ bmc_net_host_ip }}" netmask="255.255.255.0">
               <dhcp>
