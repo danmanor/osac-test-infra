@@ -198,6 +198,31 @@
         nat_source_address: "{{ bmaas_parking_cidr }}"
         nat_snat_to_ip: "{{ bmaas_parking_snat_ip }}"
 
+    # On this cloudsim softgate a standalone SNAT (or MASQUERADE) rule programs no
+    # dataplane rewrite — only a DNAT does (a 1:1 static NAT whose reverse leg is
+    # the egress source-NAT), the same way the OCP node egresses via ocp-sno-dnat.
+    # So the SNAT rule above is currently a no-op on the softgate; these per-host
+    # 1:1 DNATs are what actually give each parking IPA internet egress to pull the
+    # ironic-agent image during inspection. Parking IPAs get sequential DHCP leases
+    # from bmaas_parking_dhcp_start, mapped 1:1 to sequential external IPs from the
+    # parking NAT pool (bmaas_parking_snat_cidr, starting one past bmaas_parking_snat_ip).
+    # The SNAT rule is kept for when the softgate SNAT gap is resolved.
+    - name: Create per-host 1:1 DNAT for parking egress
+      ansible.builtin.include_role:
+        name: netris.controller.nat
+      vars:
+        nat_name: "{{ bmaas_parking_vnet_name }}-dnat-{{ idx }}"
+        nat_state: present
+        nat_action: dnat
+        nat_protocol: all
+        nat_site_id: 1
+        nat_vpc_id: "{{ vpc_id }}"
+        nat_destination_address: "{{ bmaas_parking_snat_cidr | ansible.utils.ipaddr('network') | ansible.utils.ipmath(2 + idx) }}/32"
+        nat_dnat_to_ip: "{{ bmaas_parking_dhcp_start | ansible.utils.ipmath(idx) }}"
+      loop: "{{ range(0, bmaas_vm_patterns | length) | list }}"
+      loop_control:
+        loop_var: idx
+
 # Phase 2: Prepare virtual BMH VMs (repurpose HGX VMs)
 # Skip if BMHs already exist and are available (idempotent re-run)
 - name: Check existing BMH states
