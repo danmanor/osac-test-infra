@@ -159,6 +159,32 @@
         (_parking_vnet_list.json.data | default([])
          | selectattr('name', 'equalto', bmaas_parking_vnet_name) | list | length) == 0
 
+    # The SNAT target IP must belong to a Netris IPAM subnet with purpose "nat",
+    # in the Default VPC (mirrors the mgmt "Public NAT Allocation"/"NAT pool" that
+    # backs ocp_snat_ip). Without it Netris rejects the SNAT rule with
+    # "Destination address is out of any defined subnets."
+    - name: Create IPAM allocation for parking SNAT pool
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+      vars:
+        ipam_state: create_allocation
+        ipam_name: "{{ bmaas_parking_vnet_name }}-snat-allocation"
+        ipam_cidr: "{{ bmaas_parking_snat_cidr }}"
+        ipam_tenant_id: 1
+        ipam_vpc_id: "{{ bmaas_parking_snat_vpc_id }}"
+
+    - name: Create IPAM subnet for parking SNAT pool (purpose nat)
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+      vars:
+        ipam_state: create_subnet
+        ipam_name: "{{ bmaas_parking_vnet_name }}-snat-pool"
+        ipam_cidr: "{{ bmaas_parking_snat_cidr }}"
+        ipam_purpose: nat
+        ipam_site_id: 1
+        ipam_tenant_id: 1
+        ipam_vpc_id: "{{ bmaas_parking_snat_vpc_id }}"
+
     - name: Create parking SNAT rule
       ansible.builtin.include_role:
         name: netris.controller.nat

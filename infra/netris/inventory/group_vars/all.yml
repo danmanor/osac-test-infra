@@ -226,3 +226,7 @@ bmaas_parking_fabric_iface: "eth9"        # must match bmaas_host_type_interface
 # (nat .0/29, bgp .8/29, l4lb .16/29, tenant .24/29, ocp .1/.2, assisted .9).
 bmaas_parking_snat_ip: "198.51.100.33"
 bmaas_parking_snat_cidr: "198.51.100.32/29"
+# The parking SNAT target must live in a Netris IPAM subnet with purpose "nat"
+# (mirrors the mgmt "Public NAT Allocation"/"NAT pool" that backs ocp_snat_ip),
+# created in the Default (system) VPC — id 1 — where the other NAT pools live.
+bmaas_parking_snat_vpc_id: 1
