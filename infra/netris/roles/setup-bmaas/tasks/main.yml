@@ -137,7 +137,10 @@
         body_format: json
         body:
           name: "{{ bmaas_parking_vnet_name }}"
-          vpc: {id: "{{ vpc_id | int }}"}
+          # Single Jinja expression so the dict (and its int id) survives as JSON;
+          # a quoted "{{ vpc_id | int }}" would stringify id and Netris rejects it
+          # ("Invalid vpc/id: must be integer").
+          vpc: "{{ {'id': vpc_id | int} }}"
           sites: [{id: 1}]
           state: active
           vlan: auto
