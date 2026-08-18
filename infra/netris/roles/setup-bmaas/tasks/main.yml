@@ -49,6 +49,126 @@
     KUBECONFIG: /root/.kube/config
   changed_when: false
 
+# Phase 1b: BM parking V-Net
+# Create the Netris "bm-parking" V-Net (gateway + DHCP + SNAT) and attach every
+# server's fabric port (eth9) to it, BEFORE the BMHs boot for inspection. This
+# gives the metal3 IPA internet egress (to pull the ironic-agent image from
+# quay.io) via its fabric NIC, so bmc-net can stay isolated (no default route,
+# no multi-NIC default-route conflict). The OSAC operator later moves the port
+# bm-parking -> tenant V-Net on provision and back on delete
+# (OSAC_BM_PARKING_VNET). The vendored netris.controller.vnet role only exposes
+# dhcpEnabled (no range), so the V-Net is created via a direct API call to set
+# the explicit DHCP range; VPC/IPAM/SNAT reuse the roles (mirrors configure-netris).
+- name: Set up BM parking V-Net
+  when: bmaas_parking_enabled | bool
+  block:
+    - name: Discover Netris controller URL (k3s)
+      ansible.builtin.shell:
+        cmd: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: _parking_traefik_nodeport
+      changed_when: false
+      until: _parking_traefik_nodeport.rc == 0 and _parking_traefik_nodeport.stdout | length > 0
+      retries: 10
+      delay: 15
+
+    - name: Set Netris controller URL
+      ansible.builtin.set_fact:
+        netris_controller_url: "http://localhost:{{ _parking_traefik_nodeport.stdout }}"
+
+    - name: Authenticate to Netris controller
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+
+    - name: Create parking VPC
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+      vars:
+        vpc_name: "{{ bmaas_parking_vpc_name }}"
+        vpc_state: present
+        vpc_tenant_id: 1
+
+    - name: Create IPAM allocation for parking
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+      vars:
+        ipam_state: create_allocation
+        ipam_name: "{{ bmaas_parking_vnet_name }}-allocation"
+        ipam_cidr: "{{ bmaas_parking_cidr }}"
+        ipam_tenant_id: 1
+        ipam_vpc_id: "{{ vpc_id }}"
+
+    - name: Create IPAM subnet for parking
+      ansible.builtin.include_role:
+        name: netris.controller.ipam
+      vars:
+        ipam_state: create_subnet
+        ipam_name: "{{ bmaas_parking_vnet_name }}-subnet"
+        ipam_cidr: "{{ bmaas_parking_cidr }}"
+        ipam_purpose: common
+        ipam_site_id: 1
+        ipam_tenant_id: 1
+        ipam_vpc_id: "{{ vpc_id }}"
+
+    - name: Build parking fabric port list
+      ansible.builtin.set_fact:
+        _parking_ports: "{{ _parking_ports | default([]) + [{'name': bmaas_parking_fabric_iface ~ '@' ~ item, 'accessMode': true}] }}"
+      loop: "{{ bmaas_vm_patterns }}"
+
+    - name: Get existing V-Nets
+      ansible.builtin.uri:
+        url: "{{ netris_controller_url }}/api/v2/vnet"
+        method: GET
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+        status_code: 200
+        validate_certs: "{{ netris_validate_certs | default(false) }}"
+      register: _parking_vnet_list
+      no_log: true
+
+    - name: Create parking V-Net (gateway + DHCP range + fabric ports)
+      ansible.builtin.uri:
+        url: "{{ netris_controller_url }}/api/v2/vnet"
+        method: POST
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ bmaas_parking_vnet_name }}"
+          vpc: {id: "{{ vpc_id | int }}"}
+          sites: [{id: 1}]
+          state: active
+          vlan: auto
+          tenant: {id: 1}
+          gateways:
+            - prefix: "{{ bmaas_parking_gateway }}"
+              dhcpEnabled: true
+              dhcpStartIp: "{{ bmaas_parking_dhcp_start }}"
+              dhcpEndIp: "{{ bmaas_parking_dhcp_end }}"
+          ports: "{{ _parking_ports }}"
+        status_code: [200, 201]
+        validate_certs: "{{ netris_validate_certs | default(false) }}"
+      register: _parking_vnet_create
+      changed_when: true
+      when: >-
+        (_parking_vnet_list.json.data | default([])
+         | selectattr('name', 'equalto', bmaas_parking_vnet_name) | list | length) == 0
+
+    - name: Create parking SNAT rule
+      ansible.builtin.include_role:
+        name: netris.controller.nat
+      vars:
+        nat_name: "{{ bmaas_parking_vnet_name }}-snat"
+        nat_state: present
+        nat_action: snat
+        nat_protocol: all
+        nat_site_id: 1
+        nat_vpc_id: "{{ vpc_id }}"
+        nat_source_address: "{{ bmaas_parking_cidr }}"
+        nat_snat_to_ip: "{{ bmaas_parking_snat_ip }}"
+
 # Phase 2: Prepare virtual BMH VMs (repurpose HGX VMs)
 # Skip if BMHs already exist and are available (idempotent re-run)
 - name: Check existing BMH states

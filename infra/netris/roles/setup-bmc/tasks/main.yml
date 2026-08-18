@@ -38,16 +38,14 @@
         content: |
           <network>
             <name>{{ bmc_net_name }}</name>
-            <!-- nat mode: libvirt advertises {{ bmc_net_host_ip }} as the default
-                 gateway via DHCP AND masquerades bmc-net egress to the internet. The
-                 OpenShift IPA runs ironic-agent as a podman container pulled from
-                 quay.io at inspection time, so the inspection ramdisk needs real
-                 internet egress (not just a default route). The mgmt NIC is kept
-                 gateway-less (so a provisioned tenant BMI defaults out its tenant NIC),
-                 so bmc-net must supply both the default route and the NAT egress.
-                 Without it the agent image pull times out and inspection hangs in
-                 "inspect wait". -->
-            <forward mode="nat"/>
+            <!-- Isolated (no <forward>, so libvirt hands out no default route).
+                 bmc-net only carries provisioning traffic on the connected /24:
+                 redfish virtual-media (sushy {{ bmc_net_host_ip }}) and the IPA ->
+                 Ironic callback ({{ bmc_net_ocp_ip }}). Internet egress for the IPA
+                 (pulling the ironic-agent image from quay.io) comes from the tenant
+                 fabric NIC on the Netris "bm-parking" V-Net (see setup-bmaas), NOT
+                 from bmc-net — so the running tenant BMI only ever has one default
+                 route, out its tenant NIC. -->
             <bridge name="{{ bmc_net_bridge }}"/>
             <ip address="{{ bmc_net_host_ip }}" netmask="255.255.255.0">
               <dhcp>
