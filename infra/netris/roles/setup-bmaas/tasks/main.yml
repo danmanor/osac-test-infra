@@ -159,6 +159,34 @@
         (_parking_vnet_list.json.data | default([])
          | selectattr('name', 'equalto', bmaas_parking_vnet_name) | list | length) == 0
 
+    - name: Resolve existing parking V-Net id (for port update)
+      ansible.builtin.set_fact:
+        _parking_vnet_id: >-
+          {{ (_parking_vnet_list.json.data | default([])
+              | selectattr('name', 'equalto', bmaas_parking_vnet_name)
+              | map(attribute='id') | list | first) | default('') }}
+      when: _parking_vnet_create is skipped
+
+    - name: Ensure parking V-Net has fabric ports attached
+      ansible.builtin.uri:
+        url: "{{ netris_controller_url }}/api/v2/vnet/{{ _parking_vnet_id }}"
+        method: PUT
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          ports: "{{ _parking_ports }}"
+        status_code: [200]
+        validate_certs: "{{ netris_validate_certs | default(false) }}"
+      when:
+        - _parking_vnet_create is skipped
+        - _parking_vnet_id | length > 0
+        - (_parking_vnet_list.json.data | default([])
+           | selectattr('name', 'equalto', bmaas_parking_vnet_name)
+           | map(attribute='ports') | first | default([]) | length) == 0
+      changed_when: true
+
     # The SNAT target IP must belong to a Netris IPAM subnet with purpose "nat",
     # in the Default VPC (mirrors the mgmt "Public NAT Allocation"/"NAT pool" that
     # backs ocp_snat_ip). Without it Netris rejects the SNAT rule with
