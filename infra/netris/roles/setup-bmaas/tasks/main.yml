@@ -185,26 +185,8 @@
         ipam_tenant_id: 1
         ipam_vpc_id: "{{ bmaas_parking_snat_vpc_id }}"
 
-    # Per-host 1:1 SNAT for parking egress. Each VM's DHCP address (sequential
-    # from bmaas_parking_dhcp_start) is mapped to a dedicated external IP
-    # (sequential from the parking NAT pool, one past bmaas_parking_snat_ip).
-    # The many→1 SNAT rule above covers production softgates; these per-host
-    # rules are needed on cloudsim where many→1 SNAT is a no-op.
-    - name: Create per-host 1:1 SNAT for parking egress
-      ansible.builtin.include_role:
-        name: netris.controller.nat
-      vars:
-        nat_name: "{{ bmaas_parking_vnet_name }}-snat-{{ idx }}"
-        nat_state: present
-        nat_action: snat
-        nat_protocol: all
-        nat_site_id: 1
-        nat_vpc_id: "{{ vpc_id }}"
-        nat_source_address: "{{ bmaas_parking_dhcp_start | ansible.utils.ipmath(idx) }}/32"
-        nat_snat_to_ip: "{{ bmaas_parking_snat_cidr | ansible.utils.ipaddr('network') | ansible.utils.ipmath(2 + idx) }}"
-      loop: "{{ range(0, bmaas_vm_patterns | length) | list }}"
-      loop_control:
-        loop_var: idx
+    # Per-host 1:1 SNAT rules are created after Phase 4 (BMH available) once
+    # the VMs have their parking DHCP leases — see "Phase 4b" below.
 
 # Phase 2: Prepare virtual BMH VMs (repurpose HGX VMs)
 # Skip if BMHs already exist and are available (idempotent re-run)
@@ -467,7 +449,106 @@
   register: _bmh_create
   changed_when: "'created' in _bmh_create.stdout or 'configured' in _bmh_create.stdout"
 
-# Phase 4: Wait for BMH availability
+# Phase 4a: Discover parking IPs and create per-host SNAT (before waiting for
+# BMH available). The VMs boot immediately after BMH creation; they get a
+# parking DHCP lease on ens5 within seconds. The IPA needs SNAT egress to pull
+# its container image from quay.io, so the SNAT rules must exist BEFORE the IPA
+# pull starts (~10s after boot). We discover each VM's parking IP by SSHing in
+# over bmc-net, then create the 1:1 SNAT rule.
+- name: Get bmc-net DHCP leases for VM MAC lookup
+  ansible.builtin.shell:
+    cmd: virsh net-dhcp-leases {{ bmc_net_name }}
+  register: _bmc_leases
+  changed_when: false
+  until: >-
+    bmaas_vms | length <= (_bmc_leases.stdout_lines | select('search', '10\\.99\\.') | list | length)
+  retries: 30
+  delay: 5
+
+- name: Find bmc-net IP for each VM (by bmc-net MAC)
+  ansible.builtin.set_fact:
+    _vm_bmc_ips: >-
+      {{ _vm_bmc_ips | default([]) + [
+           _bmc_leases.stdout_lines
+           | select('search', _vm_macs.results[idx].stdout | trim)
+           | map('regex_search', '(\d+\.\d+\.\d+\.\d+)')
+           | select('string')
+           | first
+      ] }}
+  loop: "{{ bmaas_vms }}"
+  loop_control:
+    index_var: idx
+
+- name: Discover parking IP on each VM via SSH (ens5)
+  ansible.builtin.shell:
+    cmd: >-
+      ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null -i /root/.ssh/id_rsa
+      core@{{ _vm_bmc_ips[idx] }}
+      "ip -4 addr show ens5 | awk '/inet/{print \$2}' | cut -d/ -f1"
+  register: _vm_parking_ips
+  changed_when: false
+  until: _vm_parking_ips.stdout | length > 0
+  retries: 20
+  delay: 5
+  loop: "{{ bmaas_vms }}"
+  loop_control:
+    index_var: idx
+
+- name: Create per-host 1:1 SNAT for parking egress
+  when: bmaas_parking_enabled | bool
+  block:
+    - name: Discover Netris controller URL (k3s) for SNAT rules
+      ansible.builtin.shell:
+        cmd: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: _snat_traefik_nodeport
+      changed_when: false
+
+    - name: Set Netris controller URL for SNAT rules
+      ansible.builtin.set_fact:
+        netris_controller_url: "http://localhost:{{ _snat_traefik_nodeport.stdout }}"
+
+    - name: Authenticate to Netris controller for SNAT rules
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+
+    - name: Resolve parking VPC id for SNAT rules
+      ansible.builtin.uri:
+        url: "{{ netris_controller_url }}/api/v2/vpc"
+        method: GET
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+        status_code: 200
+        validate_certs: "{{ netris_validate_certs | default(false) }}"
+      register: _snat_vpc_list
+      no_log: true
+
+    - name: Set parking VPC id
+      ansible.builtin.set_fact:
+        _snat_vpc_id: >-
+          {{ (_snat_vpc_list.json.data | default([])
+              | selectattr('name', 'equalto', bmaas_parking_vpc_name)
+              | map(attribute='id') | list | first) }}
+
+    - name: Create per-host 1:1 SNAT rule
+      ansible.builtin.include_role:
+        name: netris.controller.nat
+      vars:
+        nat_name: "{{ bmaas_parking_vnet_name }}-snat-{{ idx }}"
+        nat_state: present
+        nat_action: snat
+        nat_protocol: all
+        nat_site_id: 1
+        nat_vpc_id: "{{ _snat_vpc_id }}"
+        nat_source_address: "{{ _vm_parking_ips.results[idx].stdout | trim }}/32"
+        nat_snat_to_ip: "{{ bmaas_parking_snat_cidr | ansible.utils.ipaddr('network') | ansible.utils.ipmath(2 + idx) }}"
+      loop: "{{ range(0, bmaas_vm_patterns | length) | list }}"
+      loop_control:
+        loop_var: idx
+
+# Phase 4b: Wait for BMH availability (IPA can now pull its image via SNAT)
 - name: Wait for BMHs to reach available state
   ansible.builtin.shell:
     cmd: >-
