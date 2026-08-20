@@ -10,6 +10,7 @@
     method: GET
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
     return_content: true
     status_code: 200
     validate_certs: "{{ netris_validate_certs | default(true) }}"
@@ -28,6 +29,6 @@
     method: DELETE
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
-    status_code: [200, 204]
+    status_code: [200, 204, 404]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
   no_log: true
