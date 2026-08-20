@@ -244,6 +244,7 @@
           loop: "{{ range(0, bmaas_vm_patterns | length) | list }}"
           loop_control:
             loop_var: idx
+          ignore_errors: true
 
         - name: Delete parking SNAT rule
           ansible.builtin.include_role:
@@ -251,6 +252,7 @@
           vars:
             nat_name: "{{ bmaas_parking_vnet_name }}-snat"
             nat_state: absent
+          ignore_errors: true
 
         - name: Delete parking SNAT pool IPAM subnet
           ansible.builtin.include_role:
@@ -259,6 +261,7 @@
             ipam_state: delete_subnet
             ipam_name: "{{ bmaas_parking_vnet_name }}-snat-pool"
             ipam_vpc_id: "{{ bmaas_parking_snat_vpc_id }}"
+          ignore_errors: true
 
         - name: Delete parking SNAT pool IPAM allocation
           ansible.builtin.include_role:
@@ -267,6 +270,7 @@
             ipam_state: delete_allocation
             ipam_name: "{{ bmaas_parking_vnet_name }}-snat-allocation"
             ipam_vpc_id: "{{ bmaas_parking_snat_vpc_id }}"
+          ignore_errors: true
 
         - name: Get V-Net list
           ansible.builtin.uri:
@@ -292,9 +296,10 @@
             method: DELETE
             headers:
               Cookie: "connect.sid={{ netris_session_cookie }}"
-            status_code: [200, 204]
+            status_code: [200, 204, 404]
             validate_certs: "{{ netris_validate_certs | default(false) }}"
           when: _parking_vnet_id | length > 0
+          ignore_errors: true
 
         - name: Delete parking IPAM subnet
           ansible.builtin.include_role:
@@ -304,6 +309,7 @@
             ipam_name: "{{ bmaas_parking_vnet_name }}-subnet"
             ipam_vpc_id: "{{ _parking_vpc_id }}"
           when: _parking_vpc_id | length > 0
+          ignore_errors: true
 
         - name: Delete parking IPAM allocation
           ansible.builtin.include_role:
@@ -313,6 +319,7 @@
             ipam_name: "{{ bmaas_parking_vnet_name }}-allocation"
             ipam_vpc_id: "{{ _parking_vpc_id }}"
           when: _parking_vpc_id | length > 0
+          ignore_errors: true
 
         - name: Delete parking VPC
           ansible.builtin.include_role:
@@ -320,3 +327,4 @@
           vars:
             vpc_name: "{{ bmaas_parking_vpc_name }}"
             vpc_state: absent
+          ignore_errors: true
