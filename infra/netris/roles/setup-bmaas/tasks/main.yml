@@ -185,19 +185,6 @@
         ipam_tenant_id: 1
         ipam_vpc_id: "{{ bmaas_parking_snat_vpc_id }}"
 
-    - name: Create parking SNAT rule
-      ansible.builtin.include_role:
-        name: netris.controller.nat
-      vars:
-        nat_name: "{{ bmaas_parking_vnet_name }}-snat"
-        nat_state: present
-        nat_action: snat
-        nat_protocol: all
-        nat_site_id: 1
-        nat_vpc_id: "{{ vpc_id }}"
-        nat_source_address: "{{ bmaas_parking_cidr }}"
-        nat_snat_to_ip: "{{ bmaas_parking_snat_ip }}"
-
     # Per-host 1:1 SNAT for parking egress. Each VM's DHCP address (sequential
     # from bmaas_parking_dhcp_start) is mapped to a dedicated external IP
     # (sequential from the parking NAT pool, one past bmaas_parking_snat_ip).
