@@ -219,7 +219,10 @@ bmaas_parking_vpc_name: "bm-parking"
 bmaas_parking_cidr: "10.98.0.0/24"
 bmaas_parking_gateway: "10.98.0.1/24"
 bmaas_parking_dhcp_start: "10.98.0.2"
-bmaas_parking_dhcp_end: "10.98.0.254"
+# Exactly bmaas_vm_patterns-count addresses (3) — keeps VMs on .2/.3/.4 so the
+# per-host 1:1 DNATs (sequential from dhcp_start) always match. A wider range
+# lets stale leases push new VMs past the DNAT targets after destroy/recreate.
+bmaas_parking_dhcp_end: "10.98.0.4"
 bmaas_parking_fabric_iface: "eth9"        # must match bmaas_host_type_interfaces fabric NIC
 # External IP the parking SNAT maps egress to. Must be host-routed to the ISP
 # (see deploy-infra) and not overlap the other 198.51.100.0/24 pools

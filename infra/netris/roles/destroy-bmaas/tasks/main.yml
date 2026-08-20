@@ -235,7 +235,18 @@
                   | selectattr('name', 'equalto', bmaas_parking_vpc_name)
                   | map(attribute='id') | list | first) | default('') }}
 
-        - name: Delete per-host parking DNAT rules
+        - name: Delete per-host parking SNAT rules
+          ansible.builtin.include_role:
+            name: netris.controller.nat
+          vars:
+            nat_name: "{{ bmaas_parking_vnet_name }}-snat-{{ idx }}"
+            nat_state: absent
+          loop: "{{ range(0, bmaas_vm_patterns | length) | list }}"
+          loop_control:
+            loop_var: idx
+          ignore_errors: true
+
+        - name: Delete legacy per-host parking DNAT rules
           ansible.builtin.include_role:
             name: netris.controller.nat
           vars:
