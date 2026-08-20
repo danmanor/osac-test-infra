@@ -22,8 +22,12 @@
     _existing_nat: "{{ (_nat_list_resp.json.data | default([])) | selectattr('name', 'equalto', nat_name) | list | first | default(none) }}"
   when: _nat_list_resp.json is mapping
 
+- name: Debug NAT rule lookup
+  ansible.builtin.debug:
+    msg: "nat_name={{ nat_name }} _existing_nat={{ _existing_nat }}"
+
 - name: Delete NAT rule
-  when: _existing_nat is defined and _existing_nat is not none
+  when: _existing_nat is defined and _existing_nat is not none and _existing_nat != 'None'
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/nat/{{ _existing_nat.id }}"
     method: DELETE
@@ -31,4 +35,3 @@
       Cookie: "connect.sid={{ netris_session_cookie }}"
     status_code: [200, 204, 404]
     validate_certs: "{{ netris_validate_certs | default(true) }}"
-  no_log: true
