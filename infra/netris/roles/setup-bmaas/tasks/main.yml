@@ -651,9 +651,6 @@
         - path: "network_attachments"
           display_name: "Network Attachments"
           editable: true
-        - path: "auto_external_ip_attachment"
-          display_name: "Auto External IP"
-          editable: true
     validate_certs: false
     status_code: [200, 201, 409]
 
