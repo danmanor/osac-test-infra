@@ -8,6 +8,7 @@
 #
 set -euo pipefail
 
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 CAST_FILE="${CAST_FILE:-bmaas-networking-demo.cast}"
 CLEANUP="${CLEANUP:-false}"
 
@@ -531,7 +532,7 @@ run_demo() {
   # ═══════════════════════════════════════════════════════════════════════════
   header "Part 8: Teardown — Removing All Resources"
 
-  narrate "A clean demo ends with a clean environment."
+  narrate "Now let's deprovision all resources to show the full lifecycle works."
   narrate "We delete in reverse dependency order — children before parents:"
   narrate "  1. External IP Attachment (depends on External IP + BMI)"
   narrate "  2. Ingress External IP (depends on pool)"
@@ -593,6 +594,11 @@ run_demo() {
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+# When sourced by asciinema's -c command, only define functions — don't re-enter main.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
 case "${1:-}" in
   --no-record)
     run_demo
@@ -600,12 +606,12 @@ case "${1:-}" in
   --cleanup)
     CLEANUP=true
     stty cols 120 rows 40 2>/dev/null || true
-    asciinema rec --title "OSAC BMaaS Networking Demo" \
-      -c "bash -c 'source $0 && run_demo'" "${CAST_FILE}"
+    asciinema rec --overwrite --title "OSAC BMaaS Networking Demo" \
+      -c "bash -c 'source $SCRIPT_PATH && run_demo'" "${CAST_FILE}"
     ;;
   *)
     stty cols 120 rows 40 2>/dev/null || true
-    asciinema rec --title "OSAC BMaaS Networking Demo" \
-      -c "bash -c 'source $0 && run_demo'" "${CAST_FILE}"
+    asciinema rec --overwrite --title "OSAC BMaaS Networking Demo" \
+      -c "bash -c 'source $SCRIPT_PATH && run_demo'" "${CAST_FILE}"
     ;;
 esac
