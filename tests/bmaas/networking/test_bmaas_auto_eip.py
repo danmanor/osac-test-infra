@@ -45,7 +45,7 @@ class TestBmaasAutoExternalIp:
         grpc: GRPCClient,
         k8s_hub_client: K8sClient,
         network_class: str,
-        external_ip_pool_name: str,
+        external_ip_pool_id: str,
         net_test_run_id: str,
     ) -> None:
         vnet_name = f"auto-eip-{net_test_run_id}"
@@ -72,7 +72,7 @@ class TestBmaasAutoExternalIp:
         wait_for_security_group_ready(k8s=k8s_hub_client, name=sg_cr)
 
         nat_eip_name = f"auto-eip-nat-eip-{net_test_run_id}"
-        nat_eip_id = grpc.create_external_ip(name=nat_eip_name, pool=external_ip_pool_name)
+        nat_eip_id = grpc.create_external_ip(name=nat_eip_name, pool=external_ip_pool_id)
         nat_eip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=nat_eip_id)
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=nat_eip_cr)
 

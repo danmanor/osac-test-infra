@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.core.grpc_client import GRPCClient
 from tests.core.runner import env
 
 
@@ -16,8 +17,13 @@ def network_class() -> str:
 
 
 @pytest.fixture(scope="session")
-def external_ip_pool_name() -> str:
-    return env("OSAC_EXTERNAL_IP_POOL", "tenant-external-pool")
+def external_ip_pool_id(private_grpc: GRPCClient) -> str:
+    pool_name = env("OSAC_EXTERNAL_IP_POOL", "tenant-external-pool")
+    pools = private_grpc.call(service="osac.private.v1.ExternalIPPools/List")
+    for item in pools.get("items", []):
+        if item.get("metadata", {}).get("name") == pool_name:
+            return item["id"]
+    raise RuntimeError(f"ExternalIPPool '{pool_name}' not found")
 
 
 @pytest.fixture(scope="session")

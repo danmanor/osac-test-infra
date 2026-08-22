@@ -96,12 +96,12 @@ class TestBmaasNetworking:
         self.__class__.state.update(sg_id=sg_id, sg_cr=sg_cr, sg_name=sg_name)
 
     def test_04_create_nat_gateway(
-        self, grpc: GRPCClient, k8s_hub_client: K8sClient, external_ip_pool_name: str, net_test_run_id: str
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, external_ip_pool_id: str, net_test_run_id: str
     ) -> None:
         _require(self.state, "vnet_name")
 
         nat_eip_name = f"nat-eip-{net_test_run_id}"
-        nat_eip_id = grpc.create_external_ip(name=nat_eip_name, pool=external_ip_pool_name)
+        nat_eip_id = grpc.create_external_ip(name=nat_eip_name, pool=external_ip_pool_id)
         nat_eip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=nat_eip_id)
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=nat_eip_cr)
 
@@ -239,13 +239,13 @@ class TestBmaasNetworking:
         assert status == 200, f"Egress curl to quay.io returned HTTP {status}, expected 200"
 
     def test_12_external_ip_ingress(
-        self, grpc: GRPCClient, k8s_hub_client: K8sClient, external_ip_pool_name: str, net_test_run_id: str
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, external_ip_pool_id: str, net_test_run_id: str
     ) -> None:
         _require(self.state, "bmi1")
         bmi1 = self.state["bmi1"]
 
         eip_name = f"ingress-eip-{net_test_run_id}"
-        eip_id = grpc.create_external_ip(name=eip_name, pool=external_ip_pool_name)
+        eip_id = grpc.create_external_ip(name=eip_name, pool=external_ip_pool_id)
         eip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr)
 
