@@ -1,0 +1,346 @@
+from __future__ import annotations
+
+from typing import Any, ClassVar
+
+import pytest
+
+from tests.bmaas.networking import bmi_ssh
+from tests.core.grpc_client import GRPCClient
+from tests.core.helpers import (
+    wait_for_bmh_available,
+    wait_for_bmi_cr,
+    wait_for_bmi_deletion,
+    wait_for_bmi_grpc_removal,
+    wait_for_bmi_running,
+    wait_for_external_ip_allocated,
+    wait_for_external_ip_attachment_cr,
+    wait_for_external_ip_attachment_deletion,
+    wait_for_external_ip_attachment_ready,
+    wait_for_external_ip_cr,
+    wait_for_external_ip_deletion,
+    wait_for_security_group_cr,
+    wait_for_security_group_deletion,
+    wait_for_security_group_ready,
+    wait_for_subnet_cr,
+    wait_for_subnet_deletion,
+    wait_for_subnet_ready,
+    wait_for_virtual_network_cr,
+    wait_for_virtual_network_deletion,
+    wait_for_virtual_network_ready,
+)
+from tests.core.k8s_client import K8sClient
+from tests.core.osac_cli import OsacCLI
+from tests.core.runner import poll_until
+
+
+def _require(state: dict[str, Any], *keys: str) -> None:
+    missing = [k for k in keys if k not in state]
+    if missing:
+        pytest.skip(f"Prerequisite state missing: {', '.join(missing)}")
+
+
+class TestBmaasNetworking:
+    state: ClassVar[dict[str, Any]] = {}
+
+    # ── Phase 1: Build the Network ──────────────────────────────────────
+
+    def test_01_create_virtual_network(
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, network_class: str, net_test_run_id: str
+    ) -> None:
+        name = f"net-{net_test_run_id}"
+        vnet_id = grpc.create_virtual_network(name=name, network_class=network_class, ipv4_cidr="10.100.0.0/16")
+        vnet_cr = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vnet_id)
+        wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vnet_cr)
+
+        self.__class__.state["vnet_id"] = vnet_id
+        self.__class__.state["vnet_cr"] = vnet_cr
+        self.__class__.state["vnet_name"] = name
+
+    def test_02_create_subnets(self, grpc: GRPCClient, k8s_hub_client: K8sClient, net_test_run_id: str) -> None:
+        _require(self.state, "vnet_id")
+
+        subnet_a_name = f"sub-a-{net_test_run_id}"
+        subnet_a_id = grpc.create_subnet(
+            name=subnet_a_name, virtual_network=self.state["vnet_id"], ipv4_cidr="10.100.1.0/24"
+        )
+        subnet_a_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_a_id)
+        wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_a_cr)
+
+        subnet_b_name = f"sub-b-{net_test_run_id}"
+        subnet_b_id = grpc.create_subnet(
+            name=subnet_b_name, virtual_network=self.state["vnet_id"], ipv4_cidr="10.100.2.0/24"
+        )
+        subnet_b_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_b_id)
+        wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_b_cr)
+
+        self.__class__.state.update(
+            subnet_a_id=subnet_a_id, subnet_a_cr=subnet_a_cr, subnet_b_id=subnet_b_id, subnet_b_cr=subnet_b_cr
+        )
+
+    def test_03_create_security_group(self, grpc: GRPCClient, k8s_hub_client: K8sClient, net_test_run_id: str) -> None:
+        _require(self.state, "vnet_id")
+
+        sg_name = f"sg-{net_test_run_id}"
+        sg_id = grpc.create_security_group_with_rules(
+            name=sg_name,
+            virtual_network=self.state["vnet_id"],
+            ingress=[
+                {"protocol": "PROTOCOL_TCP", "port_from": 22, "port_to": 22, "ipv4_cidr": "0.0.0.0/0"},
+                {"protocol": "PROTOCOL_ICMP", "ipv4_cidr": "0.0.0.0/0"},
+            ],
+            egress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
+        )
+        sg_cr = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
+        wait_for_security_group_ready(k8s=k8s_hub_client, name=sg_cr)
+
+        self.__class__.state.update(sg_id=sg_id, sg_cr=sg_cr, sg_name=sg_name)
+
+    def test_04_create_nat_gateway(
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, external_ip_pool_name: str, net_test_run_id: str
+    ) -> None:
+        _require(self.state, "vnet_name")
+
+        nat_eip_name = f"nat-eip-{net_test_run_id}"
+        nat_eip_id = grpc.create_external_ip(name=nat_eip_name, pool=external_ip_pool_name)
+        nat_eip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=nat_eip_id)
+        wait_for_external_ip_allocated(k8s=k8s_hub_client, name=nat_eip_cr)
+
+        nat_name = f"nat-{net_test_run_id}"
+        nat_id = grpc.create_nat_gateway(
+            name=nat_name, virtual_network_name=self.state["vnet_name"], external_ip_name=nat_eip_name
+        )
+        poll_until(
+            fn=lambda: (
+                grpc.call(service="osac.public.v1.NATGateways/Get", data={"id": nat_id})
+                .get("object", {})
+                .get("status", {})
+                .get("state", "")
+            ),
+            until=lambda s: s in ("NAT_GATEWAY_STATE_READY", "Ready"),
+            retries=30,
+            delay=5,
+            description=f"NATGateway {nat_name} to become Ready",
+        )
+
+        self.__class__.state.update(
+            nat_eip_id=nat_eip_id, nat_eip_cr=nat_eip_cr, nat_eip_name=nat_eip_name, nat_id=nat_id, nat_name=nat_name
+        )
+
+    # ── Phase 2: Provision Servers ──────────────────────────────────────
+
+    def test_05_create_three_bmis(
+        self,
+        cli: OsacCLI,
+        grpc: GRPCClient,
+        k8s_hub_client: K8sClient,
+        catalog_item_name: str,
+        net_ssh_public_key: str,
+        bmh_namespace: str,
+        net_test_run_id: str,
+    ) -> None:
+        _require(self.state, "subnet_a_id", "subnet_b_id", "sg_id")
+
+        subnet_a = self.state["subnet_a_id"]
+        subnet_b = self.state["subnet_b_id"]
+        sg = self.state["sg_id"]
+
+        bmis: list[dict[str, str]] = []
+        for i, (name_suffix, subnet_id) in enumerate([("bmi1", subnet_a), ("bmi2", subnet_a), ("bmi3", subnet_b)]):
+            bmi_name = f"{name_suffix}-{net_test_run_id}"
+            bmi_id = cli.create_baremetal_instance(
+                name=bmi_name,
+                catalog_item=catalog_item_name,
+                ssh_key=net_ssh_public_key,
+                network_attachments=[f"subnet={subnet_id},interface=eth9,primary,security-groups={sg}"],
+            )
+            print(f"Created BMI {bmi_name}: {bmi_id}")
+            bmis.append({"name": bmi_name, "id": bmi_id, "subnet": "a" if i < 2 else "b"})
+
+        for bmi in bmis:
+            bmi["cr"] = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi["id"])
+            print(f"BMI {bmi['name']} CR: {bmi['cr']}")
+
+        for bmi in bmis:
+            wait_for_bmi_running(grpc=grpc, bmi_id=bmi["id"])
+            print(f"BMI {bmi['name']} is RUNNING")
+
+        for bmi in bmis:
+            bmi["ip"] = k8s_hub_client.get_baremetal_instance_tenant_ip(name=bmi["cr"])
+            assert bmi["ip"], f"BMI {bmi['name']} has no tenant IP"
+
+            ext_host = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi["cr"])
+            bmi["bmh"] = ext_host.split("/", 1)[1]
+            bmi["bmc_ip"] = bmi_ssh.get_bmc_ip(bmi["bmh"])
+            print(f"BMI {bmi['name']}: tenant_ip={bmi['ip']}, bmh={bmi['bmh']}, bmc_ip={bmi['bmc_ip']}")
+
+        for bmi in bmis:
+            if bmi["subnet"] == "a":
+                assert bmi["ip"].startswith("10.100.1."), f"BMI {bmi['name']} IP {bmi['ip']} not in subnet A"
+            else:
+                assert bmi["ip"].startswith("10.100.2."), f"BMI {bmi['name']} IP {bmi['ip']} not in subnet B"
+
+        self.__class__.state["bmi1"] = bmis[0]
+        self.__class__.state["bmi2"] = bmis[1]
+        self.__class__.state["bmi3"] = bmis[2]
+
+    # ── Phase 3: Connectivity Tests ─────────────────────────────────────
+
+    def test_06_l2_arping_same_subnet(self) -> None:
+        _require(self.state, "bmi1", "bmi2")
+        bmi1 = self.state["bmi1"]
+        bmi2 = self.state["bmi2"]
+
+        assert bmi_ssh.arping(bmi1["bmc_ip"], bmi2["ip"]), (
+            f"arping from BMI1 ({bmi1['ip']}) to BMI2 ({bmi2['ip']}) failed — expected L2 reachability on same subnet"
+        )
+
+    def test_07_l3_ping_same_subnet(self) -> None:
+        _require(self.state, "bmi1", "bmi2")
+        bmi1 = self.state["bmi1"]
+        bmi2 = self.state["bmi2"]
+
+        assert bmi_ssh.ping(bmi1["bmc_ip"], bmi2["ip"]), (
+            f"ping from BMI1 ({bmi1['ip']}) to BMI2 ({bmi2['ip']}) failed — expected L3 reachability on same subnet"
+        )
+
+    def test_08_l3_ping_cross_subnet(self) -> None:
+        _require(self.state, "bmi1", "bmi3")
+        bmi1 = self.state["bmi1"]
+        bmi3 = self.state["bmi3"]
+
+        assert bmi_ssh.ping(bmi1["bmc_ip"], bmi3["ip"]), (
+            f"ping from BMI1 ({bmi1['ip']}, subnet A) to BMI3 ({bmi3['ip']}, subnet B) failed — expected L3 routing"
+        )
+
+    def test_09_l2_arping_cross_subnet_fails(self) -> None:
+        _require(self.state, "bmi1", "bmi3")
+        bmi1 = self.state["bmi1"]
+        bmi3 = self.state["bmi3"]
+
+        assert not bmi_ssh.arping(bmi1["bmc_ip"], bmi3["ip"]), (
+            f"arping from BMI1 ({bmi1['ip']}, subnet A) to BMI3 ({bmi3['ip']}, subnet B) "
+            f"succeeded unexpectedly — different subnets should be different broadcast domains"
+        )
+
+    def test_10_tenant_isolation(self, mgmt_cluster_ip: str) -> None:
+        _require(self.state, "bmi1")
+        bmi1 = self.state["bmi1"]
+
+        assert not bmi_ssh.ping(bmi1["bmc_ip"], mgmt_cluster_ip), (
+            f"ping from BMI1 ({bmi1['ip']}) to management cluster ({mgmt_cluster_ip}) "
+            f"succeeded unexpectedly — tenant isolation should prevent cross-VNet traffic"
+        )
+
+    def test_11_nat_gateway_egress(self) -> None:
+        _require(self.state, "bmi1")
+        bmi1 = self.state["bmi1"]
+
+        status = bmi_ssh.curl_status(bmi1["bmc_ip"], "https://quay.io")
+        assert status == 200, f"Egress curl to quay.io returned HTTP {status}, expected 200"
+
+    def test_12_external_ip_ingress(
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, external_ip_pool_name: str, net_test_run_id: str
+    ) -> None:
+        _require(self.state, "bmi1")
+        bmi1 = self.state["bmi1"]
+
+        eip_name = f"ingress-eip-{net_test_run_id}"
+        eip_id = grpc.create_external_ip(name=eip_name, pool=external_ip_pool_name)
+        eip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
+        wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr)
+
+        attach_name = f"ingress-attach-{net_test_run_id}"
+        attach_id = grpc.create_external_ip_attachment_bmi(
+            name=attach_name, external_ip=eip_id, baremetal_instance=bmi1["id"]
+        )
+        attach_cr = wait_for_external_ip_attachment_cr(k8s=k8s_hub_client, uuid=attach_id)
+        wait_for_external_ip_attachment_ready(k8s=k8s_hub_client, name=attach_cr)
+
+        eip_data = grpc.get_external_ip(external_ip_id=eip_id)
+        ext_addr = eip_data.get("object", {}).get("status", {}).get("address", "")
+        assert ext_addr, "ExternalIP has no allocated address"
+
+        hostname = bmi_ssh.ssh_via_external_ip(ext_addr)
+        assert hostname, f"SSH via external IP {ext_addr} returned empty hostname"
+
+        self.__class__.state.update(
+            ingress_eip_id=eip_id,
+            ingress_eip_cr=eip_cr,
+            ingress_attach_id=attach_id,
+            ingress_attach_cr=attach_cr,
+            ingress_ext_addr=ext_addr,
+        )
+
+    # ── Phase 4: Teardown ───────────────────────────────────────────────
+
+    def test_13_delete_external_ip_attachment(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
+        if "ingress_attach_id" not in self.state:
+            pytest.skip("No ExternalIPAttachment to delete")
+
+        grpc.delete_external_ip_attachment(attachment_id=self.state["ingress_attach_id"])
+        wait_for_external_ip_attachment_deletion(k8s=k8s_hub_client, name=self.state["ingress_attach_cr"])
+
+        grpc.delete_external_ip(external_ip_id=self.state["ingress_eip_id"])
+        wait_for_external_ip_deletion(k8s=k8s_hub_client, name=self.state["ingress_eip_cr"])
+
+    def test_14_delete_bmis(
+        self, cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, bmh_namespace: str
+    ) -> None:
+        for key in ("bmi1", "bmi2", "bmi3"):
+            if key not in self.state:
+                continue
+            bmi = self.state[key]
+            print(f"Deleting {bmi['name']}...")
+            cli.delete_baremetal_instance(uuid=bmi["id"])
+
+        for key in ("bmi1", "bmi2", "bmi3"):
+            if key not in self.state:
+                continue
+            bmi = self.state[key]
+            wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi["cr"])
+            wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi["id"])
+            wait_for_bmh_available(k8s=k8s_hub_client, name=bmi["bmh"], bmh_namespace=bmh_namespace)
+            print(f"{bmi['name']} deprovisioned, BMH {bmi['bmh']} available")
+
+    def test_15_delete_nat_gateway(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
+        if "nat_id" not in self.state:
+            pytest.skip("No NATGateway to delete")
+
+        grpc.delete_nat_gateway(nat_gateway_id=self.state["nat_id"])
+        poll_until(
+            fn=lambda: (
+                self.state["nat_id"]
+                not in [item["id"] for item in grpc.call(service="osac.public.v1.NATGateways/List").get("items", [])]
+            ),
+            until=lambda gone: gone is True,
+            retries=60,
+            delay=5,
+            description=f"NATGateway {self.state['nat_name']} deletion",
+        )
+
+        grpc.delete_external_ip(external_ip_id=self.state["nat_eip_id"])
+        wait_for_external_ip_deletion(k8s=k8s_hub_client, name=self.state["nat_eip_cr"])
+
+    def test_16_delete_security_group(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
+        if "sg_id" not in self.state:
+            pytest.skip("No SecurityGroup to delete")
+
+        grpc.delete_security_group(sg_id=self.state["sg_id"])
+        wait_for_security_group_deletion(k8s=k8s_hub_client, name=self.state["sg_cr"])
+
+    def test_17_delete_subnets(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
+        for key, cr_key in [("subnet_a_id", "subnet_a_cr"), ("subnet_b_id", "subnet_b_cr")]:
+            if key not in self.state:
+                continue
+            grpc.delete_subnet(subnet_id=self.state[key])
+            wait_for_subnet_deletion(k8s=k8s_hub_client, name=self.state[cr_key])
+
+    def test_18_delete_virtual_network(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
+        if "vnet_id" not in self.state:
+            pytest.skip("No VirtualNetwork to delete")
+
+        grpc.delete_virtual_network(vn_id=self.state["vnet_id"])
+        wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=self.state["vnet_cr"])
+
+        remaining = grpc.list_virtual_network_ids()
+        assert self.state["vnet_id"] not in remaining, "VirtualNetwork still in API after deletion"
