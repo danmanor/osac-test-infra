@@ -52,6 +52,27 @@ def catalog_item_name() -> str:
 
 
 @pytest.fixture(scope="session")
+def auto_eip_catalog_item(private_grpc: GRPCClient, bmi_template: str, net_test_run_id: str):
+    name = f"auto-eip-ci-{net_test_run_id}"
+    item_id = private_grpc.create_baremetal_instance_catalog_item(
+        name=name,
+        title=f"Auto EIP Test ({net_test_run_id})",
+        description="Catalog item with auto_external_ip_attachment for E2E test",
+        template=bmi_template,
+        field_definitions=[
+            {"path": "ssh_public_key", "display_name": "SSH Public Key", "editable": True},
+            {"path": "network_attachments", "display_name": "Network Attachments", "editable": True},
+            {"path": "auto_external_ip_attachment", "display_name": "Auto External IP", "editable": True},
+        ],
+    )
+    yield {"id": item_id, "name": name}
+    try:
+        private_grpc.delete_baremetal_instance_catalog_item(item_id=item_id)
+    except Exception as e:
+        print(f"WARNING: Failed to delete auto-eip catalog item {item_id}: {e}")
+
+
+@pytest.fixture(scope="session")
 def net_ssh_public_key():
     with tempfile.TemporaryDirectory() as tmpdir:
         key_path = Path(tmpdir) / "bmaas-net-test-key"

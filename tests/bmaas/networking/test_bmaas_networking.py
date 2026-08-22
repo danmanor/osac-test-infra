@@ -134,6 +134,7 @@ class TestBmaasNetworking:
         grpc: GRPCClient,
         k8s_hub_client: K8sClient,
         catalog_item_name: str,
+        auto_eip_catalog_item: dict[str, str],
         net_ssh_public_key: str,
         bmh_namespace: str,
         net_test_run_id: str,
@@ -147,13 +148,14 @@ class TestBmaasNetworking:
         bmis: list[dict[str, str]] = []
         for i, (name_suffix, subnet_id) in enumerate([("bmi1", subnet_a), ("bmi2", subnet_a), ("bmi3", subnet_b)]):
             bmi_name = f"{name_suffix}-{net_test_run_id}"
+            catalog = auto_eip_catalog_item["name"] if i == 2 else catalog_item_name
             bmi_id = cli.create_baremetal_instance(
                 name=bmi_name,
-                catalog_item=catalog_item_name,
+                catalog_item=catalog,
                 ssh_key=net_ssh_public_key,
                 network_attachments=[f"subnet={subnet_id},interface=eth9,primary,security-groups={sg}"],
             )
-            print(f"Created BMI {bmi_name}: {bmi_id}")
+            print(f"Created BMI {bmi_name}: {bmi_id} (catalog: {catalog})")
             bmis.append({"name": bmi_name, "id": bmi_id, "subnet": "a" if i < 2 else "b"})
 
         for bmi in bmis:
@@ -182,6 +184,39 @@ class TestBmaasNetworking:
         self.__class__.state["bmi1"] = bmis[0]
         self.__class__.state["bmi2"] = bmis[1]
         self.__class__.state["bmi3"] = bmis[2]
+
+    def test_05b_verify_auto_eip_on_bmi3(self, grpc: GRPCClient) -> None:
+        _require(self.state, "bmi3")
+        bmi3 = self.state["bmi3"]
+
+        def find_auto_attachment() -> dict[str, Any] | None:
+            attachments = grpc.call(service="osac.public.v1.ExternalIPAttachments/List")
+            for item in attachments.get("items", []):
+                bmi_ref = item.get("spec", {}).get("bare_metal_instance", {}).get("id", "")
+                if bmi_ref == bmi3["id"]:
+                    return item
+            return None
+
+        attachment = poll_until(
+            fn=find_auto_attachment,
+            until=lambda a: a is not None,
+            retries=60,
+            delay=5,
+            description="auto-created ExternalIPAttachment for BMI3",
+        )
+
+        auto_attach_id = attachment["id"]
+        auto_eip_ref = attachment.get("spec", {}).get("external_ip", {}).get("id", "")
+        assert auto_eip_ref, "Auto-created attachment has no ExternalIP reference"
+
+        eip_data = grpc.get_external_ip(external_ip_id=auto_eip_ref)
+        auto_ext_addr = eip_data.get("object", {}).get("status", {}).get("address", "")
+        assert auto_ext_addr, "Auto-created ExternalIP has no allocated address"
+
+        self.__class__.state.update(
+            auto_attach_id=auto_attach_id, auto_eip_id=auto_eip_ref, auto_ext_addr=auto_ext_addr
+        )
+        print(f"BMI3 auto EIP: {auto_ext_addr}, attachment: {auto_attach_id}")
 
     # ── Phase 3: Connectivity Tests ─────────────────────────────────────
 
@@ -301,6 +336,27 @@ class TestBmaasNetworking:
             wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi["id"])
             wait_for_bmh_available(k8s=k8s_hub_client, name=bmi["bmh"], bmh_namespace=bmh_namespace)
             print(f"{bmi['name']} deprovisioned, BMH {bmi['bmh']} available")
+
+    def test_14b_verify_auto_eip_garbage_collected(self, grpc: GRPCClient) -> None:
+        if "auto_attach_id" not in self.state:
+            pytest.skip("No auto EIP to verify")
+
+        poll_until(
+            fn=lambda: self.state["auto_attach_id"] not in grpc.list_external_ip_attachment_ids(),
+            until=lambda gone: gone is True,
+            retries=30,
+            delay=5,
+            description="auto-created ExternalIPAttachment garbage collection",
+        )
+
+        poll_until(
+            fn=lambda: self.state["auto_eip_id"] not in grpc.list_external_ip_ids(),
+            until=lambda gone: gone is True,
+            retries=30,
+            delay=5,
+            description="auto-created ExternalIP garbage collection",
+        )
+        print("Auto EIP and attachment garbage collected after BMI3 deletion")
 
     def test_15_delete_nat_gateway(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
         if "nat_id" not in self.state:
