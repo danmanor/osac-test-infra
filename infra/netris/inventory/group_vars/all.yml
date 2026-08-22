@@ -205,6 +205,9 @@ bmaas_bmi_template: "osac.templates.bm_host_provisioning"
 bmaas_catalog_item: "ci-bm-default"
 bmaas_catalog_item_title: "CI Default Bare Metal Instance"
 bmaas_catalog_item_description: "Bare metal instance for CI testing"
+bmaas_auto_eip_catalog_item: "ci-bm-auto-eip"
+bmaas_auto_eip_catalog_item_title: "CI Bare Metal Instance with Auto External IP"
+bmaas_auto_eip_catalog_item_description: "Bare metal instance with automatic ExternalIP attachment for CI testing"
 
 # ── BM parking V-Net ─────────────────────────────────────────────────
 # Unassigned BM servers' fabric NIC (eth9) sits on this Netris V-Net, which has

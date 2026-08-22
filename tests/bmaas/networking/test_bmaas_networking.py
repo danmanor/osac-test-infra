@@ -134,7 +134,7 @@ class TestBmaasNetworking:
         grpc: GRPCClient,
         k8s_hub_client: K8sClient,
         catalog_item_name: str,
-        auto_eip_catalog_item: dict[str, str],
+        auto_eip_catalog_item_name: str,
         net_ssh_public_key: str,
         bmh_namespace: str,
         net_test_run_id: str,
@@ -148,7 +148,7 @@ class TestBmaasNetworking:
         bmis: list[dict[str, str]] = []
         for i, (name_suffix, subnet_id) in enumerate([("bmi1", subnet_a), ("bmi2", subnet_a), ("bmi3", subnet_b)]):
             bmi_name = f"{name_suffix}-{net_test_run_id}"
-            catalog = auto_eip_catalog_item["name"] if i == 2 else catalog_item_name
+            catalog = auto_eip_catalog_item_name if i == 2 else catalog_item_name
             bmi_id = cli.create_baremetal_instance(
                 name=bmi_name,
                 catalog_item=catalog,
@@ -167,8 +167,13 @@ class TestBmaasNetworking:
             print(f"BMI {bmi['name']} is RUNNING")
 
         for bmi in bmis:
-            bmi["ip"] = k8s_hub_client.get_baremetal_instance_tenant_ip(name=bmi["cr"])
-            assert bmi["ip"], f"BMI {bmi['name']} has no tenant IP"
+            bmi["ip"] = poll_until(
+                fn=lambda b=bmi: k8s_hub_client.get_baremetal_instance_tenant_ip(name=b["cr"]),
+                until=lambda ip: ip != "",
+                retries=60,
+                delay=10,
+                description=f"BMI {bmi['name']} tenant IP assignment",
+            )
 
             ext_host = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi["cr"])
             bmi["bmh"] = ext_host.split("/", 1)[1]

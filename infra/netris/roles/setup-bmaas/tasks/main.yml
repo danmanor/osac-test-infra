@@ -654,12 +654,41 @@
     validate_certs: false
     status_code: [200, 201, 409]
 
-- name: Verify catalog item is accessible
+- name: Create BMI catalog item with auto ExternalIP
+  ansible.builtin.uri:
+    url: "{{ _fulfillment_api }}/api/private/v1/baremetal_instance_catalog_items"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _sa_token.stdout }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      metadata:
+        name: "{{ bmaas_auto_eip_catalog_item }}"
+      title: "{{ bmaas_auto_eip_catalog_item_title }}"
+      description: "{{ bmaas_auto_eip_catalog_item_description }}"
+      template:
+        id: "{{ _bmi_template.json.id }}"
+      published: true
+      field_definitions:
+        - path: "ssh_public_key"
+          display_name: "SSH Public Key"
+          editable: true
+        - path: "network_attachments"
+          display_name: "Network Attachments"
+          editable: true
+        - path: "auto_external_ip_attachment"
+          display_name: "Auto External IP"
+          editable: true
+    validate_certs: false
+    status_code: [200, 201, 409]
+
+- name: Verify catalog items are accessible
   ansible.builtin.command:
     cmd: osac get baremetalinstancecatalogitems
   register: _catalog_check
   changed_when: false
-  until: bmaas_catalog_item in _catalog_check.stdout
+  until: bmaas_catalog_item in _catalog_check.stdout and bmaas_auto_eip_catalog_item in _catalog_check.stdout
   retries: 10
   delay: 5
 
@@ -667,5 +696,5 @@
   ansible.builtin.debug:
     msg: >-
       BMaaS setup complete. {{ bmaas_vms | length }} virtual BMHs available in namespace {{ bmaas_bmh_namespace }}.
-      Catalog item '{{ bmaas_catalog_item }}' ready.
+      Catalog items '{{ bmaas_catalog_item }}' and '{{ bmaas_auto_eip_catalog_item }}' ready.
       Create a BMI with: osac create baremetalinstance --catalog-item {{ bmaas_catalog_item }}
