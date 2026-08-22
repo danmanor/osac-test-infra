@@ -148,12 +148,14 @@ class TestBmaasNetworking:
         bmis: list[dict[str, str]] = []
         for i, (name_suffix, subnet_id) in enumerate([("bmi1", subnet_a), ("bmi2", subnet_a), ("bmi3", subnet_b)]):
             bmi_name = f"{name_suffix}-{net_test_run_id}"
-            catalog = auto_eip_catalog_item_name if i == 2 else catalog_item_name
+            is_auto_eip = i == 2
+            catalog = auto_eip_catalog_item_name if is_auto_eip else catalog_item_name
             bmi_id = cli.create_baremetal_instance(
                 name=bmi_name,
                 catalog_item=catalog,
                 ssh_key=net_ssh_public_key,
                 network_attachments=[f"subnet={subnet_id},interface=eth9,primary,security-groups={sg}"],
+                external_ip_attachment=is_auto_eip,
             )
             print(f"Created BMI {bmi_name}: {bmi_id} (catalog: {catalog})")
             bmis.append({"name": bmi_name, "id": bmi_id, "subnet": "a" if i < 2 else "b"})
