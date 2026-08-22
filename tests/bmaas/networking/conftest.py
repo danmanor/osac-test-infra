@@ -12,11 +12,6 @@ from tests.core.runner import env
 
 
 @pytest.fixture(scope="session")
-def network_class() -> str:
-    return env("OSAC_NETWORK_CLASS", "netris")
-
-
-@pytest.fixture(scope="session")
 def external_ip_pool_id(private_grpc: GRPCClient) -> str:
     pool_name = env("OSAC_EXTERNAL_IP_POOL", "tenant-external-pool")
     pools = private_grpc.call(service="osac.private.v1.ExternalIPPools/List")

@@ -45,10 +45,10 @@ class TestBmaasNetworking:
     # ── Phase 1: Build the Network ──────────────────────────────────────
 
     def test_01_create_virtual_network(
-        self, grpc: GRPCClient, k8s_hub_client: K8sClient, network_class: str, net_test_run_id: str
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, net_test_run_id: str
     ) -> None:
         name = f"net-{net_test_run_id}"
-        vnet_id = grpc.create_virtual_network(name=name, network_class=network_class, ipv4_cidr="10.100.0.0/16")
+        vnet_id = grpc.create_virtual_network(name=name, ipv4_cidr="10.100.0.0/16")
         vnet_cr = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vnet_id)
         wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vnet_cr)
 
