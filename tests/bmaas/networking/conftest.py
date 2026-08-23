@@ -12,13 +12,13 @@ from tests.core.runner import env
 
 
 @pytest.fixture(scope="session")
-def external_ip_pool_id(private_grpc: GRPCClient) -> str:
-    pool_name = env("OSAC_EXTERNAL_IP_POOL", "tenant-external-pool")
-    pools = private_grpc.call(service="osac.private.v1.ExternalIPPools/List")
-    for item in pools.get("items", []):
-        if item.get("metadata", {}).get("name") == pool_name:
-            return item["id"]
-    raise RuntimeError(f"ExternalIPPool '{pool_name}' not found")
+def external_ip_pool_name() -> str:
+    return env("OSAC_EXTERNAL_IP_POOL", "tenant-external-pool")
+
+
+@pytest.fixture(scope="session")
+def external_ip_pool_cidr() -> str:
+    return env("OSAC_EXTERNAL_IP_POOL_CIDR", "198.51.100.24/29")
 
 
 @pytest.fixture(scope="session")

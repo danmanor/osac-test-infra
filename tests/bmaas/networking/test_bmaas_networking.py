@@ -18,6 +18,10 @@ from tests.core.helpers import (
     wait_for_external_ip_attachment_ready,
     wait_for_external_ip_cr,
     wait_for_external_ip_deletion,
+    wait_for_external_ip_pool_cr,
+    wait_for_external_ip_pool_deletion,
+    wait_for_external_ip_pool_grpc_ready,
+    wait_for_external_ip_pool_ready,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
     wait_for_security_group_ready,
@@ -41,6 +45,26 @@ def _require(state: dict[str, Any], *keys: str) -> None:
 
 class TestBmaasNetworking:
     state: ClassVar[dict[str, Any]] = {}
+
+    # ── Phase 0: External IP Pool ─────────────────────────────────────
+
+    def test_00_create_external_ip_pool(
+        self,
+        private_grpc: GRPCClient,
+        k8s_hub_client: K8sClient,
+        external_ip_pool_name: str,
+        external_ip_pool_cidr: str,
+    ) -> None:
+        pool_id = private_grpc.create_external_ip_pool(
+            name=external_ip_pool_name,
+            cidrs=[external_ip_pool_cidr],
+        )
+        pool_cr = wait_for_external_ip_pool_cr(k8s=k8s_hub_client, uuid=pool_id)
+        wait_for_external_ip_pool_ready(k8s=k8s_hub_client, name=pool_cr)
+        wait_for_external_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
+
+        self.__class__.state.update(pool_id=pool_id, pool_cr=pool_cr)
+        print(f"Created ExternalIPPool {external_ip_pool_name}: {pool_id}")
 
     # ── Phase 1: Build the Network ──────────────────────────────────────
 
@@ -96,12 +120,12 @@ class TestBmaasNetworking:
         self.__class__.state.update(sg_id=sg_id, sg_cr=sg_cr, sg_name=sg_name)
 
     def test_04_create_nat_gateway(
-        self, grpc: GRPCClient, k8s_hub_client: K8sClient, external_ip_pool_id: str, net_test_run_id: str
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, net_test_run_id: str
     ) -> None:
-        _require(self.state, "vnet_name")
+        _require(self.state, "vnet_name", "pool_id")
 
         nat_eip_name = f"nat-eip-{net_test_run_id}"
-        nat_eip_id = grpc.create_external_ip(name=nat_eip_name, pool=external_ip_pool_id)
+        nat_eip_id = grpc.create_external_ip(name=nat_eip_name, pool=self.state["pool_id"])
         nat_eip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=nat_eip_id)
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=nat_eip_cr)
 
@@ -281,13 +305,13 @@ class TestBmaasNetworking:
         assert status == 200, f"Egress curl to quay.io returned HTTP {status}, expected 200"
 
     def test_12_external_ip_ingress(
-        self, grpc: GRPCClient, k8s_hub_client: K8sClient, external_ip_pool_id: str, net_test_run_id: str
+        self, grpc: GRPCClient, k8s_hub_client: K8sClient, net_test_run_id: str
     ) -> None:
-        _require(self.state, "bmi1")
+        _require(self.state, "bmi1", "pool_id")
         bmi1 = self.state["bmi1"]
 
         eip_name = f"ingress-eip-{net_test_run_id}"
-        eip_id = grpc.create_external_ip(name=eip_name, pool=external_ip_pool_id)
+        eip_id = grpc.create_external_ip(name=eip_name, pool=self.state["pool_id"])
         eip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr)
 
@@ -407,3 +431,13 @@ class TestBmaasNetworking:
 
         remaining = grpc.list_virtual_network_ids()
         assert self.state["vnet_id"] not in remaining, "VirtualNetwork still in API after deletion"
+
+    def test_19_delete_external_ip_pool(self, private_grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
+        if "pool_id" not in self.state:
+            pytest.skip("No ExternalIPPool to delete")
+
+        private_grpc.delete_external_ip_pool(pool_id=self.state["pool_id"])
+        wait_for_external_ip_pool_deletion(k8s=k8s_hub_client, name=self.state["pool_cr"])
+
+        remaining = private_grpc.list_external_ip_pool_ids()
+        assert self.state["pool_id"] not in remaining, "ExternalIPPool still in API after deletion"
