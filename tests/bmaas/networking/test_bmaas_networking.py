@@ -237,7 +237,7 @@ class TestBmaasNetworking:
         )
 
         auto_attach_id = attachment["id"]
-        auto_eip_ref = attachment.get("spec", {}).get("external_ip", {}).get("id", "")
+        auto_eip_ref = attachment.get("spec", {}).get("externalIp", {}).get("id", "")
         assert auto_eip_ref, "Auto-created attachment has no ExternalIP reference"
 
         eip_data = grpc.get_external_ip(external_ip_id=auto_eip_ref)
