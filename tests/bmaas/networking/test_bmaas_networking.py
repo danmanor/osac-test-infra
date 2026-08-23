@@ -223,7 +223,7 @@ class TestBmaasNetworking:
         def find_auto_attachment() -> dict[str, Any] | None:
             attachments = grpc.call(service="osac.public.v1.ExternalIPAttachments/List")
             for item in attachments.get("items", []):
-                bmi_ref = item.get("spec", {}).get("baremetal_instance", {}).get("id", "")
+                bmi_ref = item.get("spec", {}).get("baremetalInstance", {}).get("id", "")
                 if bmi_ref == bmi3["id"]:
                     return item
             return None
