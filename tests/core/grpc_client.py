@@ -310,7 +310,7 @@ class GRPCClient:
             data={
                 "object": {
                     "metadata": {"name": name},
-                    "spec": {"external_ip": {"id": external_ip}, "bare_metal_instance": {"id": baremetal_instance}},
+                    "spec": {"external_ip": {"id": external_ip}, "baremetal_instance": {"id": baremetal_instance}},
                 }
             },
         )
