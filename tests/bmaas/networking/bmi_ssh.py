@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 import subprocess
+
+log = logging.getLogger(__name__)
 
 _SSH_OPTS = [
     "-o",
@@ -58,14 +61,16 @@ def ping(bmc_ip: str, target_ip: str, count: int = 3, wait: int = 3) -> bool:
 
 
 def curl_status(bmc_ip: str, url: str, timeout: int = 10) -> int:
-    output, _ = ssh_bmi_unchecked(
+    output, rc = ssh_bmi_unchecked(
         bmc_ip,
         f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout {timeout} {url}",
         timeout=timeout + 20,
     )
+    log.info("curl_status(%s, %s): ssh_rc=%d, output=%r", bmc_ip, url, rc, output[-200:])
     try:
         return int(output.strip().splitlines()[-1])
     except (ValueError, IndexError):
+        log.warning("curl_status: could not parse HTTP status from output, returning 0")
         return 0
 
 

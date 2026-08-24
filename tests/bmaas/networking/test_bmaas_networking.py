@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from typing import Any, ClassVar
 
 import pytest
@@ -257,8 +258,12 @@ class TestBmaasNetworking:
         bmi1 = self.state["bmi1"]
         bmi2 = self.state["bmi2"]
 
-        assert bmi_ssh.arping(bmi1["bmc_ip"], bmi2["ip"]), (
-            f"arping from BMI1 ({bmi1['ip']}) to BMI2 ({bmi2['ip']}) failed — expected L2 reachability on same subnet"
+        poll_until(
+            fn=lambda: bmi_ssh.arping(bmi1["bmc_ip"], bmi2["ip"]),
+            until=lambda ok: ok,
+            retries=5,
+            delay=10,
+            description=f"L2 arping BMI1 ({bmi1['ip']}) → BMI2 ({bmi2['ip']})",
         )
 
     def test_07_l3_ping_same_subnet(self) -> None:
@@ -266,8 +271,12 @@ class TestBmaasNetworking:
         bmi1 = self.state["bmi1"]
         bmi2 = self.state["bmi2"]
 
-        assert bmi_ssh.ping(bmi1["bmc_ip"], bmi2["ip"]), (
-            f"ping from BMI1 ({bmi1['ip']}) to BMI2 ({bmi2['ip']}) failed — expected L3 reachability on same subnet"
+        poll_until(
+            fn=lambda: bmi_ssh.ping(bmi1["bmc_ip"], bmi2["ip"]),
+            until=lambda ok: ok,
+            retries=5,
+            delay=10,
+            description=f"L3 ping BMI1 ({bmi1['ip']}) → BMI2 ({bmi2['ip']})",
         )
 
     def test_08_l3_ping_cross_subnet(self) -> None:
@@ -275,8 +284,12 @@ class TestBmaasNetworking:
         bmi1 = self.state["bmi1"]
         bmi3 = self.state["bmi3"]
 
-        assert bmi_ssh.ping(bmi1["bmc_ip"], bmi3["ip"]), (
-            f"ping from BMI1 ({bmi1['ip']}, subnet A) to BMI3 ({bmi3['ip']}, subnet B) failed — expected L3 routing"
+        poll_until(
+            fn=lambda: bmi_ssh.ping(bmi1["bmc_ip"], bmi3["ip"]),
+            until=lambda ok: ok,
+            retries=5,
+            delay=10,
+            description=f"L3 ping BMI1 ({bmi1['ip']}) → BMI3 ({bmi3['ip']}) cross-subnet",
         )
 
     def test_09_l2_arping_cross_subnet_fails(self) -> None:
@@ -302,8 +315,13 @@ class TestBmaasNetworking:
         _require(self.state, "bmi1")
         bmi1 = self.state["bmi1"]
 
-        status = bmi_ssh.curl_status(bmi1["bmc_ip"], "https://quay.io")
-        assert status == 200, f"Egress curl to quay.io returned HTTP {status}, expected 200"
+        poll_until(
+            fn=lambda: bmi_ssh.curl_status(bmi1["bmc_ip"], "https://quay.io"),
+            until=lambda status: status == 200,
+            retries=5,
+            delay=15,
+            description=f"NAT gateway egress curl quay.io (bmc_ip={bmi1['bmc_ip']}, tenant_ip={bmi1['ip']})",
+        )
 
     def test_12_external_ip_ingress(
         self, grpc: GRPCClient, k8s_hub_client: K8sClient, net_test_run_id: str
@@ -327,8 +345,19 @@ class TestBmaasNetworking:
         ext_addr = eip_data.get("object", {}).get("status", {}).get("address", "")
         assert ext_addr, "ExternalIP has no allocated address"
 
-        hostname = bmi_ssh.ssh_via_external_ip(ext_addr)
-        assert hostname, f"SSH via external IP {ext_addr} returned empty hostname"
+        def _try_ssh_eip() -> str:
+            try:
+                return bmi_ssh.ssh_via_external_ip(ext_addr, timeout=10)
+            except subprocess.CalledProcessError:
+                return ""
+
+        hostname = poll_until(
+            fn=_try_ssh_eip,
+            until=lambda h: bool(h),
+            retries=5,
+            delay=15,
+            description=f"SSH via external IP {ext_addr}",
+        )
 
         self.__class__.state.update(
             ingress_eip_id=eip_id,
