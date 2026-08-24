@@ -234,7 +234,7 @@ class GRPCClient:
         name: str,
         cidrs: list[str],
         ip_family: str = "IP_FAMILY_IPV4",
-        implementation_strategy: str = "netris",
+        implementation_strategy: str = "",
     ) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.ExternalIPPools/Create",

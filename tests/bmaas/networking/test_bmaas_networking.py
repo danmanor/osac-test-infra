@@ -58,6 +58,7 @@ class TestBmaasNetworking:
         pool_id = private_grpc.create_external_ip_pool(
             name=external_ip_pool_name,
             cidrs=[external_ip_pool_cidr],
+            implementation_strategy="netris",
         )
         pool_cr = wait_for_external_ip_pool_cr(k8s=k8s_hub_client, uuid=pool_id)
         wait_for_external_ip_pool_ready(k8s=k8s_hub_client, name=pool_cr)
