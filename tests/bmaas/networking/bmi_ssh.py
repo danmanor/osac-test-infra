@@ -44,9 +44,17 @@ def ssh_bmi(bmc_ip: str, command: str, timeout: int = 30) -> subprocess.Complete
 
 
 def ssh_bmi_unchecked(bmc_ip: str, command: str, timeout: int = 30) -> tuple[str, int]:
-    result = subprocess.run(
-        ["ssh", *_SSH_OPTS, f"fedora@{bmc_ip}", command], capture_output=True, text=True, timeout=timeout, check=False
-    )
+    try:
+        result = subprocess.run(
+            ["ssh", *_SSH_OPTS, f"fedora@{bmc_ip}", command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("ssh_bmi_unchecked(%s): subprocess timed out after %ds", bmc_ip, timeout)
+        return f"ssh timed out after {timeout}s", 255
     return (result.stdout.strip() + "\n" + result.stderr.strip()).strip(), result.returncode
 
 
@@ -60,11 +68,11 @@ def ping(bmc_ip: str, target_ip: str, count: int = 3, wait: int = 3) -> bool:
     return rc == 0
 
 
-def curl_status(bmc_ip: str, url: str, timeout: int = 10) -> int:
+def curl_status(bmc_ip: str, url: str, timeout: int = 15) -> int:
     output, rc = ssh_bmi_unchecked(
         bmc_ip,
         f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout {timeout} {url}",
-        timeout=timeout + 20,
+        timeout=timeout + 30,
     )
     log.info("curl_status(%s, %s): ssh_rc=%d, output=%r", bmc_ip, url, rc, output[-200:])
     try:
