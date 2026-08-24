@@ -227,6 +227,20 @@
         nat_source_address: "{{ bmaas_provisioning_cidr }}"
         nat_snat_to_ip: "{{ bmaas_provisioning_snat_ip }}"
 
+    - name: Create V-Net lock Lease for provisioning network
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: coordination.k8s.io/v1
+          kind: Lease
+          metadata:
+            name: "netris-vnet-lock-{{ bmaas_provisioning_vnet_name }}"
+            namespace: "{{ osac_namespace }}"
+          spec:
+            leaseDurationSeconds: 120
+      environment:
+        KUBECONFIG: /root/.kube/config
+
 # Phase 2: Prepare virtual BMH VMs (repurpose HGX VMs)
 # Skip if BMHs already exist and are available (idempotent re-run)
 - name: Check existing BMH states

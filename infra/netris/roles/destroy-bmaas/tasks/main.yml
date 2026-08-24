@@ -188,6 +188,17 @@
     state: absent
   loop: "{{ bmaas_vms }}"
 
+- name: Delete V-Net lock Lease for provisioning network
+  kubernetes.core.k8s:
+    state: absent
+    api_version: coordination.k8s.io/v1
+    kind: Lease
+    name: "netris-vnet-lock-{{ bmaas_provisioning_vnet_name }}"
+    namespace: "{{ osac_namespace }}"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  ignore_errors: true
+
 # ── Phase 5: Netris BM provisioning V-Net teardown (reverse of setup "Set up BM provisioning V-Net") ──
 # setup-bmaas creates the provisioning VPC/V-Net/IPAM/SNAT/DNATs, so destroy-bmaas
 # removes them. Runs last: the BMH deprovision above needs the provisioning DNAT
