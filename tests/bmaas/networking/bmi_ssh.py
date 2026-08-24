@@ -75,11 +75,12 @@ def curl_status(bmc_ip: str, url: str, timeout: int = 15) -> int:
         timeout=timeout + 30,
     )
     log.info("curl_status(%s, %s): ssh_rc=%d, output=%r", bmc_ip, url, rc, output[-200:])
-    try:
-        return int(output.strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        log.warning("curl_status: could not parse HTTP status from output, returning 0")
-        return 0
+    for line in output.strip().splitlines():
+        line = line.strip()
+        if line.isdigit() and len(line) == 3:
+            return int(line)
+    log.warning("curl_status: no HTTP status code found in output, returning 0")
+    return 0
 
 
 def ssh_via_external_ip(external_ip: str, command: str = "hostname", timeout: int = 15) -> str:
