@@ -48,7 +48,7 @@ def ssh_bmi_unchecked(bmc_ip: str, command: str, timeout: int = 30) -> tuple[str
 
 
 def arping(bmc_ip: str, target_ip: str, interface: str = "ens5", count: int = 3) -> bool:
-    _, rc = ssh_bmi_unchecked(bmc_ip, f"toolbox run arping -c {count} -I {interface} {target_ip}", timeout=30)
+    _, rc = ssh_bmi_unchecked(bmc_ip, f"arping -c {count} -I {interface} {target_ip}", timeout=30)
     return rc == 0
 
 
@@ -60,7 +60,7 @@ def ping(bmc_ip: str, target_ip: str, count: int = 3, wait: int = 3) -> bool:
 def curl_status(bmc_ip: str, url: str, timeout: int = 10) -> int:
     output, _ = ssh_bmi_unchecked(
         bmc_ip,
-        f"toolbox run curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout {timeout} {url}",
+        f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout {timeout} {url}",
         timeout=timeout + 20,
     )
     try:
