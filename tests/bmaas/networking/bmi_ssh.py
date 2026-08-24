@@ -36,13 +36,13 @@ def get_bmc_ip(bmh_name: str) -> str:
 
 def ssh_bmi(bmc_ip: str, command: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["ssh", *_SSH_OPTS, f"core@{bmc_ip}", command], capture_output=True, text=True, timeout=timeout, check=True
+        ["ssh", *_SSH_OPTS, f"fedora@{bmc_ip}", command], capture_output=True, text=True, timeout=timeout, check=True
     )
 
 
 def ssh_bmi_unchecked(bmc_ip: str, command: str, timeout: int = 30) -> tuple[str, int]:
     result = subprocess.run(
-        ["ssh", *_SSH_OPTS, f"core@{bmc_ip}", command], capture_output=True, text=True, timeout=timeout, check=False
+        ["ssh", *_SSH_OPTS, f"fedora@{bmc_ip}", command], capture_output=True, text=True, timeout=timeout, check=False
     )
     return (result.stdout.strip() + "\n" + result.stderr.strip()).strip(), result.returncode
 
@@ -81,7 +81,7 @@ def ssh_via_external_ip(external_ip: str, command: str = "hostname", timeout: in
             "UserKnownHostsFile=/dev/null",
             "-i",
             "/root/.ssh/id_rsa",
-            f"core@{external_ip}",
+            f"fedora@{external_ip}",
             command,
         ],
         capture_output=True,
