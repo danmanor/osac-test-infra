@@ -12,7 +12,7 @@ netris_validate_certs: false
 ocp_vm_name_pattern: "hgx-pod00-su0-h00"
 ocp_server_vcpu: 20
 ocp_server_memory_gb: 64
-ocp_install_disk_gb: 100
+ocp_install_disk_gb: 200
 ocp_lvm_disk_gb: 200
 
 # Netris Networking for OCP
@@ -209,30 +209,30 @@ bmaas_auto_eip_catalog_item: "ci-bm-auto-eip"
 bmaas_auto_eip_catalog_item_title: "CI Bare Metal Instance with Auto External IP"
 bmaas_auto_eip_catalog_item_description: "Bare metal instance with automatic ExternalIP attachment for CI testing"
 
-# ── BM parking V-Net ─────────────────────────────────────────────────
+# ── BM provisioning V-Net ────────────────────────────────────────────
 # Unassigned BM servers' fabric NIC (eth9) sits on this Netris V-Net, which has
 # DHCP + a default gateway + SNAT, so the metal3 IPA has internet egress during
 # inspection/cleaning (bmc-net stays isolated with no default route). The OSAC
-# operator moves the port bm-parking -> tenant V-Net on provision and back on
-# delete (bmf-operator env OSAC_BM_PARKING_VNET). The V-Net name is a hard
-# contract with the operator — must be exactly "bm-parking".
-bmaas_parking_enabled: true
-bmaas_parking_vnet_name: "bm-parking"     # contract with OSAC_BM_PARKING_VNET
-bmaas_parking_vpc_name: "bm-parking"
-bmaas_parking_cidr: "10.98.0.0/24"
-bmaas_parking_gateway: "10.98.0.1/24"
-bmaas_parking_dhcp_start: "10.98.0.2"
+# operator moves the port bm-provisioning -> tenant V-Net on provision and back
+# on delete (bmf-operator env NETRIS_BM_PROVISIONING_VNET).
+bmaas_provisioning_enabled: true
+bmaas_provisioning_vnet_name: "bm-provisioning"
+bmaas_provisioning_vpc_name: "bm-provisioning"
+bmaas_provisioning_cidr: "10.98.0.0/24"
+bmaas_provisioning_gateway: "10.98.0.1/24"
+bmaas_provisioning_dhcp_start: "10.98.0.2"
 # Exactly bmaas_vm_patterns-count addresses (3) — keeps VMs on .2/.3/.4 so the
 # per-host 1:1 DNATs (sequential from dhcp_start) always match. A wider range
 # lets stale leases push new VMs past the DNAT targets after destroy/recreate.
-bmaas_parking_dhcp_end: "10.98.0.4"
-bmaas_parking_fabric_iface: "eth9"        # must match bmaas_host_type_interfaces fabric NIC
-# External IP the parking SNAT maps egress to. Must be host-routed to the ISP
-# (see deploy-infra) and not overlap the other 198.51.100.0/24 pools
+bmaas_provisioning_dhcp_end: "10.98.0.4"
+bmaas_provisioning_fabric_iface: "eth9"   # must match bmaas_host_type_interfaces fabric NIC
+# External IP the provisioning SNAT maps egress to. Must be host-routed to the
+# ISP (see deploy-infra) and not overlap the other 198.51.100.0/24 pools
 # (nat .0/29, bgp .8/29, l4lb .16/29, tenant .24/29, ocp .1/.2, assisted .9).
-bmaas_parking_snat_ip: "198.51.100.33"
-bmaas_parking_snat_cidr: "198.51.100.32/29"
-# The parking SNAT target must live in a Netris IPAM subnet with purpose "nat"
-# (mirrors the mgmt "Public NAT Allocation"/"NAT pool" that backs ocp_snat_ip),
-# created in the Default (system) VPC — id 1 — where the other NAT pools live.
-bmaas_parking_snat_vpc_id: 1
+bmaas_provisioning_snat_ip: "198.51.100.33"
+bmaas_provisioning_snat_cidr: "198.51.100.32/29"
+# The provisioning SNAT target must live in a Netris IPAM subnet with purpose
+# "nat" (mirrors the mgmt "Public NAT Allocation"/"NAT pool" that backs
+# ocp_snat_ip), created in the Default (system) VPC — id 1 — where the other
+# NAT pools live.
+bmaas_provisioning_snat_vpc_id: 1

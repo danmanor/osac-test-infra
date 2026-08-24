@@ -60,7 +60,7 @@
     - "{{ nat_cidr }}"
     - "{{ l4lb_cidr }}"
     - "{{ osac_external_ip_pool_cidr }}"
-    - "{{ bmaas_parking_snat_cidr }}"
+    - "{{ bmaas_provisioning_snat_cidr }}"
 
 # The mgmt-cluster pools (nat_cidr/l4lb_cidr) are allocated in Netris and
 # routed by netris-lab at provision time. The OSAC tenant ExternalIPPool CIDR

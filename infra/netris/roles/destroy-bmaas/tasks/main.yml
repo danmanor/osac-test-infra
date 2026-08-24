@@ -188,30 +188,30 @@
     state: absent
   loop: "{{ bmaas_vms }}"
 
-# ── Phase 5: Netris BM parking V-Net teardown (reverse of setup "Set up BM parking V-Net") ──
-# setup-bmaas creates the parking VPC/V-Net/IPAM/SNAT/DNATs, so destroy-bmaas
-# removes them. Runs last: the BMH deprovision above needs the parking DNAT egress
-# (IPA pulls its image) until it completes. Deletes run in reverse creation order:
-# DNAT rules, SNAT rule, SNAT NAT pool, V-Net, parking IPAM, then the VPC. Every
-# role delete is idempotent (find-by-name, skip if already gone).
-- name: Tear down BM parking V-Net
-  when: bmaas_parking_enabled | bool
+# ── Phase 5: Netris BM provisioning V-Net teardown (reverse of setup "Set up BM provisioning V-Net") ──
+# setup-bmaas creates the provisioning VPC/V-Net/IPAM/SNAT/DNATs, so destroy-bmaas
+# removes them. Runs last: the BMH deprovision above needs the provisioning DNAT
+# egress (IPA pulls its image) until it completes. Deletes run in reverse creation
+# order: DNAT rules, SNAT rule, SNAT NAT pool, V-Net, provisioning IPAM, then the
+# VPC. Every role delete is idempotent (find-by-name, skip if already gone).
+- name: Tear down BM provisioning V-Net
+  when: bmaas_provisioning_enabled | bool
   block:
     - name: Discover Netris controller URL (k3s)
       ansible.builtin.shell:
         cmd: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      register: _parking_traefik_nodeport
+      register: _provisioning_traefik_nodeport
       changed_when: false
       failed_when: false
 
-    - name: Tear down parking Netris resources
-      when: _parking_traefik_nodeport.rc == 0 and (_parking_traefik_nodeport.stdout | length > 0)
+    - name: Tear down provisioning Netris resources
+      when: _provisioning_traefik_nodeport.rc == 0 and (_provisioning_traefik_nodeport.stdout | length > 0)
       block:
         - name: Set Netris controller URL
           ansible.builtin.set_fact:
-            netris_controller_url: "http://localhost:{{ _parking_traefik_nodeport.stdout }}"
+            netris_controller_url: "http://localhost:{{ _provisioning_traefik_nodeport.stdout }}"
 
         - name: Authenticate to Netris controller
           ansible.builtin.include_role:
@@ -225,62 +225,62 @@
               Cookie: "connect.sid={{ netris_session_cookie }}"
             status_code: 200
             validate_certs: "{{ netris_validate_certs | default(false) }}"
-          register: _parking_vpc_list
+          register: _provisioning_vpc_list
           no_log: true
 
-        - name: Resolve parking VPC id
+        - name: Resolve provisioning VPC id
           ansible.builtin.set_fact:
-            _parking_vpc_id: >-
-              {{ (_parking_vpc_list.json.data | default([])
-                  | selectattr('name', 'equalto', bmaas_parking_vpc_name)
+            _provisioning_vpc_id: >-
+              {{ (_provisioning_vpc_list.json.data | default([])
+                  | selectattr('name', 'equalto', bmaas_provisioning_vpc_name)
                   | map(attribute='id') | list | first) | default('') }}
 
-        - name: Delete per-host parking DNAT rules
+        - name: Delete per-host provisioning DNAT rules
           ansible.builtin.include_role:
             name: netris.controller.nat
           vars:
-            nat_name: "{{ bmaas_parking_vnet_name }}-dnat-{{ idx }}"
+            nat_name: "{{ bmaas_provisioning_vnet_name }}-dnat-{{ idx }}"
             nat_state: absent
           loop: "{{ range(0, bmaas_vm_patterns | length) | list }}"
           loop_control:
             loop_var: idx
           ignore_errors: true
 
-        - name: Delete legacy per-host parking SNAT rules
+        - name: Delete legacy per-host provisioning SNAT rules
           ansible.builtin.include_role:
             name: netris.controller.nat
           vars:
-            nat_name: "{{ bmaas_parking_vnet_name }}-snat-{{ idx }}"
+            nat_name: "{{ bmaas_provisioning_vnet_name }}-snat-{{ idx }}"
             nat_state: absent
           loop: "{{ range(0, bmaas_vm_patterns | length) | list }}"
           loop_control:
             loop_var: idx
           ignore_errors: true
 
-        - name: Delete parking SNAT rule
+        - name: Delete provisioning SNAT rule
           ansible.builtin.include_role:
             name: netris.controller.nat
           vars:
-            nat_name: "{{ bmaas_parking_vnet_name }}-snat"
+            nat_name: "{{ bmaas_provisioning_vnet_name }}-snat"
             nat_state: absent
           ignore_errors: true
 
-        - name: Delete parking SNAT pool IPAM subnet
+        - name: Delete provisioning SNAT pool IPAM subnet
           ansible.builtin.include_role:
             name: netris.controller.ipam
           vars:
             ipam_state: delete_subnet
-            ipam_name: "{{ bmaas_parking_vnet_name }}-snat-pool"
-            ipam_vpc_id: "{{ bmaas_parking_snat_vpc_id }}"
+            ipam_name: "{{ bmaas_provisioning_vnet_name }}-snat-pool"
+            ipam_vpc_id: "{{ bmaas_provisioning_snat_vpc_id }}"
           ignore_errors: true
 
-        - name: Delete parking SNAT pool IPAM allocation
+        - name: Delete provisioning SNAT pool IPAM allocation
           ansible.builtin.include_role:
             name: netris.controller.ipam
           vars:
             ipam_state: delete_allocation
-            ipam_name: "{{ bmaas_parking_vnet_name }}-snat-allocation"
-            ipam_vpc_id: "{{ bmaas_parking_snat_vpc_id }}"
+            ipam_name: "{{ bmaas_provisioning_vnet_name }}-snat-allocation"
+            ipam_vpc_id: "{{ bmaas_provisioning_snat_vpc_id }}"
           ignore_errors: true
 
         - name: Get V-Net list
@@ -291,51 +291,51 @@
               Cookie: "connect.sid={{ netris_session_cookie }}"
             status_code: 200
             validate_certs: "{{ netris_validate_certs | default(false) }}"
-          register: _parking_vnet_del_list
+          register: _provisioning_vnet_del_list
           no_log: true
 
-        - name: Resolve parking V-Net id
+        - name: Resolve provisioning V-Net id
           ansible.builtin.set_fact:
-            _parking_vnet_id: >-
-              {{ (_parking_vnet_del_list.json.data | default([])
-                  | selectattr('name', 'equalto', bmaas_parking_vnet_name)
+            _provisioning_vnet_id: >-
+              {{ (_provisioning_vnet_del_list.json.data | default([])
+                  | selectattr('name', 'equalto', bmaas_provisioning_vnet_name)
                   | map(attribute='id') | list | first) | default('') }}
 
-        - name: Delete parking V-Net
+        - name: Delete provisioning V-Net
           ansible.builtin.uri:
-            url: "{{ netris_controller_url }}/api/v2/vnet/{{ _parking_vnet_id }}"
+            url: "{{ netris_controller_url }}/api/v2/vnet/{{ _provisioning_vnet_id }}"
             method: DELETE
             headers:
               Cookie: "connect.sid={{ netris_session_cookie }}"
             status_code: [200, 204, 404]
             validate_certs: "{{ netris_validate_certs | default(false) }}"
-          when: _parking_vnet_id | length > 0
+          when: _provisioning_vnet_id | length > 0
           ignore_errors: true
 
-        - name: Delete parking IPAM subnet
+        - name: Delete provisioning IPAM subnet
           ansible.builtin.include_role:
             name: netris.controller.ipam
           vars:
             ipam_state: delete_subnet
-            ipam_name: "{{ bmaas_parking_vnet_name }}-subnet"
-            ipam_vpc_id: "{{ _parking_vpc_id }}"
-          when: _parking_vpc_id | length > 0
+            ipam_name: "{{ bmaas_provisioning_vnet_name }}-subnet"
+            ipam_vpc_id: "{{ _provisioning_vpc_id }}"
+          when: _provisioning_vpc_id | length > 0
           ignore_errors: true
 
-        - name: Delete parking IPAM allocation
+        - name: Delete provisioning IPAM allocation
           ansible.builtin.include_role:
             name: netris.controller.ipam
           vars:
             ipam_state: delete_allocation
-            ipam_name: "{{ bmaas_parking_vnet_name }}-allocation"
-            ipam_vpc_id: "{{ _parking_vpc_id }}"
-          when: _parking_vpc_id | length > 0
+            ipam_name: "{{ bmaas_provisioning_vnet_name }}-allocation"
+            ipam_vpc_id: "{{ _provisioning_vpc_id }}"
+          when: _provisioning_vpc_id | length > 0
           ignore_errors: true
 
-        - name: Delete parking VPC
+        - name: Delete provisioning VPC
           ansible.builtin.include_role:
             name: netris.controller.vpc
           vars:
-            vpc_name: "{{ bmaas_parking_vpc_name }}"
+            vpc_name: "{{ bmaas_provisioning_vpc_name }}"
             vpc_state: absent
           ignore_errors: true

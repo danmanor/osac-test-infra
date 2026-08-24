@@ -146,7 +146,7 @@
               'NETRIS_TENANT_NAME': 'Admin',
               'NETRIS_MGMT_VPC_ID': _netris_mgmt_vpc_id | string,
               'NETRIS_MGMT_VPC_NAME': ocp_vpc_name,
-              'NETRIS_BM_PARKING_VNET': bmaas_parking_vnet_name,
+              'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name,
               'NETRIS_RESOURCE_CLASS_MAP': _netris_resource_class_map | to_json,
               'SERVER_MGMT_ROUTE_DESTINATION': '192.168.16.0/20',
               'SERVER_MGMT_ROUTE_GATEWAY': '192.168.16.1',
@@ -168,7 +168,7 @@
               'NETRIS_SITE_ID': _netris_site_id | string,
               'NETRIS_TENANT_ID': '1',
               'NETRIS_TENANT_NAME': 'Admin',
-              'NETRIS_BM_PARKING_VNET': bmaas_parking_vnet_name
+              'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name
             }, 'secret': {
               'NETRIS_PASSWORD': netris_password
             }}
