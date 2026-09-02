@@ -330,6 +330,67 @@ def make_read_artifact_file_tool(artifact_dir):
     return read_artifact_file
 
 
+# Vertex AI list price for gemini-2.5-flash, USD per 1M tokens, as of when
+# this was written -- pricing drifts; verify at
+# https://cloud.google.com/vertex-ai/generative-ai/pricing before relying
+# on the estimate below for anything beyond a rough per-run sanity check.
+GEMINI_FLASH_INPUT_USD_PER_MILLION = 0.30
+GEMINI_FLASH_OUTPUT_USD_PER_MILLION = 2.50
+
+
+def format_cost_line(usage_metadata):
+    """Rough per-diagnosis cost estimate, appended to the bottom of the
+    diagnosis text -- makes the plan's own "confirm actual GCP spend is
+    sane" verification step visible per-run instead of requiring someone
+    to go dig through Cloud Billing.
+
+    Only reflects the FINAL response's own usage_metadata, not a sum
+    across every automatic-function-calling round trip within this one
+    call. This is a hard API limitation, not a shortcut: with
+    chat.send_message()'s automatic function calling, neither the
+    response's own automatic_function_calling_history nor
+    Chat.get_history() expose anything beyond plain Content (conversation
+    turns) for intermediate rounds -- no usage_metadata is available for
+    them at all in google-genai==2.21.0 (confirmed by inspecting both
+    types directly). Accumulating true per-turn usage would mean
+    replacing automatic function calling with a hand-rolled
+    generate_content loop -- a much larger change than this estimate is
+    worth. Gemini's multi-turn accounting does resend the full growing
+    conversation as input on each turn, so prompt_token_count here still
+    captures nearly all of the input-side cost; only the (typically tiny)
+    output tokens from intermediate function-call-issuing turns aren't
+    separately counted, so this slightly undercounts, never overcounts.
+
+    Sums explicit, unambiguous fields rather than deriving output via
+    `total - prompt`: tool_use_prompt_token_count (function-calling/tool-
+    declaration overhead) is input-side despite landing in
+    total_token_count, so subtracting only prompt_token_count would
+    silently fold it into the output bucket and overcount it at the
+    pricier output rate.
+    """
+    if not usage_metadata:
+        return ""
+    prompt_tokens = usage_metadata.prompt_token_count
+    candidates_tokens = usage_metadata.candidates_token_count
+    if prompt_tokens is None or candidates_tokens is None:
+        # A bare "$0.0000" here would look like a real (negligible) cost
+        # rather than "no usage data" -- say so plainly instead of
+        # silently defaulting missing fields to 0.
+        return "<sub>Estimated cost: unavailable (response had no usage data)</sub>"
+    tool_use_prompt_tokens = usage_metadata.tool_use_prompt_token_count or 0
+    thoughts_tokens = usage_metadata.thoughts_token_count or 0
+    input_tokens = prompt_tokens + tool_use_prompt_tokens
+    output_tokens = candidates_tokens + thoughts_tokens
+    cost_usd = (
+        input_tokens / 1_000_000 * GEMINI_FLASH_INPUT_USD_PER_MILLION
+        + output_tokens / 1_000_000 * GEMINI_FLASH_OUTPUT_USD_PER_MILLION
+    )
+    return (
+        f"<sub>Estimated cost: ${cost_usd:.4f} "
+        f"({input_tokens} input + {output_tokens} output tokens, gemini-2.5-flash)</sub>"
+    )
+
+
 def call_gemini(prompt, artifact_dir):
     from google import genai
     from google.genai import types
@@ -350,7 +411,12 @@ def call_gemini(prompt, artifact_dir):
         ),
     )
     resp = chat.send_message(prompt)
-    return resp.text or "(empty response from Gemini)"
+    text = resp.text or "(empty response from Gemini)"
+    try:
+        cost_line = format_cost_line(resp.usage_metadata)
+    except Exception:  # noqa: BLE001 -- a cost-formatting bug must never lose a real diagnosis
+        cost_line = ""
+    return f"{text}\n\n{cost_line}" if cost_line else text
 
 
 def main():
