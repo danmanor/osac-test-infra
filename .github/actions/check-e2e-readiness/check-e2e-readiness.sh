@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # OSAC-3370: decide whether a PR is ready for expensive e2e.
 #
-# Allow when (fail closed otherwise):
-#   1. "lgtm" label present (Prow removes on push), or
+# Allow when:
+#   1. "lgtm" label present, or it was applied earlier (Prow / auto-queue
+#      strip the label on push; a prior /lgtm still unlocks later SHAs unless
+#      a human has outstanding CHANGES_REQUESTED), or
 #   2. "e2e-ready" label present (cleanup workflow removes on push), or
 #   3. coderabbitai[bot] APPROVED on head AND no outstanding human CHANGES_REQUESTED
+# Otherwise wait: ready=false, exit 0 (do not fail). Fetch/API errors still fail.
 #
 # Human APPROVED reviews do NOT unlock e2e (untrusted for this cost gate).
 #
@@ -23,6 +26,78 @@
 set -euo pipefail
 
 CODERABBIT_LOGIN='coderabbitai[bot]'
+
+# Write ready=true|false for the composite action output (no-op outside Actions).
+write_ready_output() {
+  local ready="$1"
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "ready=${ready}" >> "${GITHUB_OUTPUT}"
+  fi
+}
+
+# Write a single-line reason for job output / overlay title (no-op outside Actions).
+write_reason_output() {
+  local reason="$1"
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "reason=${reason}" >> "${GITHUB_OUTPUT}"
+  fi
+}
+
+# Job Summary shows on the check page; ::notice:: does not.
+write_readiness_summary() {
+  local ready="$1"
+  local reason="$2"
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    {
+      echo "## E2E readiness"
+      echo ""
+      echo "- ready: \`${ready}\`"
+      echo "- ${reason}"
+    } >> "${GITHUB_STEP_SUMMARY}"
+  fi
+}
+
+# Prints commit_id if CodeRabbit's latest decision is APPROVED; else return 1.
+coderabbit_latest_approved_commit() {
+  local reviews_json="$1"
+  local sha
+  sha=$(jq -r --arg who "${CODERABBIT_LOGIN}" '
+    ([.[]
+      | select(.user.login == $who)
+      | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+    ] | max_by([(.submitted_at // ""), (.id // 0)]) // empty) as $latest
+    | if ($latest != null) and ($latest.state == "APPROVED") and ($latest.commit_id != null)
+      then $latest.commit_id
+      else empty
+      end
+  ' <<<"${reviews_json}")
+  [[ -n "${sha}" && "${sha}" != "null" ]] || return 1
+  echo "${sha}"
+}
+
+# One-line wait reason when decide_e2e_readiness denies (stdout empty except untrusted e2e-ready).
+explain_e2e_wait() {
+  local labels_json="$1"
+  local reviews_json="$2"
+  local head_sha="$3"
+  local events_json="${4:-[]}"
+
+  if labels_have_e2e_ready "${labels_json}" && ! e2e_ready_applied_by_trusted_actor "${events_json}"; then
+    echo "denied: e2e-ready label present but applied by untrusted actor"
+    return 0
+  fi
+  if human_has_changes_requested "${reviews_json}"; then
+    echo "waiting: human CHANGES_REQUESTED still open"
+    return 0
+  fi
+  local cr_sha=""
+  cr_sha=$(coderabbit_latest_approved_commit "${reviews_json}" || true)
+  if [[ -n "${cr_sha}" && "${cr_sha}" != "${head_sha}" ]]; then
+    echo "waiting: CR APPROVED on older SHA ${cr_sha:0:7}"
+    return 0
+  fi
+  echo "waiting: no CR APPROVED on this SHA"
+}
 
 # Returns 0 if labels JSON contains the given label name.
 labels_have() {
@@ -58,6 +133,18 @@ e2e_ready_applied_by_trusted_actor() {
 # Returns 0 if labels JSON includes lgtm.
 labels_have_lgtm() {
   labels_have "$1" "lgtm"
+}
+
+# Returns 0 if issue events include at least one labeled lgtm.
+# Current label is not required: Prow and auto-queue unlabeled on push.
+pr_ever_had_lgtm() {
+  local events_json="$1"
+  jq -e '
+    [.[]
+      | select(.event == "labeled")
+      | select(.label.name == "lgtm")
+    ] | length > 0
+  ' <<<"${events_json}" >/dev/null 2>&1
 }
 
 # Returns 0 if any human reviewer's latest decision is CHANGES_REQUESTED.
@@ -112,6 +199,10 @@ decide_e2e_readiness() {
 
   if labels_have_lgtm "${labels_json}"; then
     echo "allowed: lgtm label present"
+    return 0
+  fi
+  if pr_ever_had_lgtm "${events_json}" && ! human_has_changes_requested "${reviews_json}"; then
+    echo "allowed: lgtm was applied earlier"
     return 0
   fi
   if labels_have_e2e_ready "${labels_json}"; then
@@ -243,12 +334,20 @@ events_json="$(cat "${tmp}/events.json")"
 
 if reason=$(decide_e2e_readiness "${labels_json}" "${reviews_json}" "${HEAD_SHA}" "${events_json}"); then
   echo "${reason}"
+  write_ready_output true
+  write_reason_output "${reason}"
+  write_readiness_summary true "${reason}"
   exit 0
 fi
 
-echo "::error::E2E readiness gate: PR #${PR_NUMBER} is not ready for expensive CI at ${HEAD_SHA:0:7}."
-echo "::error::Need a CodeRabbit APPROVED review on this head, \`lgtm\` label, or \`e2e-ready\` label."
-if human_has_changes_requested "${reviews_json}"; then
-  echo "::error::Note: a human requested changes — CodeRabbit approval alone does not unlock e2e until that is cleared."
+if [[ -z "${reason}" ]]; then
+  reason=$(explain_e2e_wait "${labels_json}" "${reviews_json}" "${HEAD_SHA}" "${events_json}")
 fi
-exit 1
+
+echo "::notice::E2E readiness gate: PR #${PR_NUMBER} is waiting for unlock at ${HEAD_SHA:0:7}."
+echo "::notice::${reason}"
+echo "::notice::Need a CodeRabbit APPROVED review on this head, \`lgtm\` (now or earlier), or \`/e2e-ready\`."
+write_ready_output false
+write_reason_output "${reason}"
+write_readiness_summary false "${reason}"
+exit 0

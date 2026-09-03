@@ -9,6 +9,7 @@ CHECK_E2E_READINESS_LIB_ONLY=1 source "${SCRIPT_DIR}/check-e2e-readiness.sh"
 pass=0
 fail=0
 
+# Pass if expected equals actual; log name.
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
   if [[ "${expected}" == "${actual}" ]]; then
@@ -20,6 +21,7 @@ assert_eq() {
   fi
 }
 
+# Run remaining args; pass if exit code equals expected_rc. Name is $1.
 assert_rc() {
   local name="$1" expected_rc="$2"
   shift 2
@@ -83,6 +85,16 @@ EVENTS_E2E_READY_HUMAN_THEN_BOT='[
   {"event":"labeled","label":{"name":"e2e-ready"},"actor":{"login":"github-actions[bot]","type":"Bot"}}
 ]'
 EVENTS_NONE='[]'
+EVENTS_LGTM_LABELED='[
+  {"event":"labeled","label":{"name":"lgtm"},"actor":{"login":"alice","type":"User"}}
+]'
+EVENTS_LGTM_THEN_UNLABELED='[
+  {"event":"labeled","label":{"name":"lgtm"},"actor":{"login":"alice","type":"User"}},
+  {"event":"unlabeled","label":{"name":"lgtm"},"actor":{"login":"openshift-ci[bot]","type":"Bot"}}
+]'
+EVENTS_LGTM_UNLABELED_ONLY='[
+  {"event":"unlabeled","label":{"name":"lgtm"},"actor":{"login":"openshift-ci[bot]","type":"Bot"}}
+]'
 
 REVIEWS_HUMAN_SAME_SECOND_CR_WINS='[
   {"id":1,"submitted_at":"2026-01-02T00:00:00Z","state":"APPROVED","commit_id":"head-commit","author_association":"MEMBER","user":{"login":"alice","type":"User"}},
@@ -126,6 +138,12 @@ assert_rc "coderabbit blocked by same-second human CR" 1 coderabbit_approves_hea
 assert_rc "coderabbit same-second higher id dismiss" 1 coderabbit_approves_head "${REVIEWS_BOT_SAME_SECOND_DISMISS_WINS}" "${HEAD_SHA}"
 assert_rc "coderabbit same-second higher id approve" 0 coderabbit_approves_head "${REVIEWS_BOT_SAME_SECOND_APPROVE_WINS}" "${HEAD_SHA}"
 
+# --- pr_ever_had_lgtm ---
+assert_rc "pr_ever_had_lgtm labeled" 0 pr_ever_had_lgtm "${EVENTS_LGTM_LABELED}"
+assert_rc "pr_ever_had_lgtm labeled then unlabeled" 0 pr_ever_had_lgtm "${EVENTS_LGTM_THEN_UNLABELED}"
+assert_rc "pr_ever_had_lgtm unlabeled only" 1 pr_ever_had_lgtm "${EVENTS_LGTM_UNLABELED_ONLY}"
+assert_rc "pr_ever_had_lgtm none" 1 pr_ever_had_lgtm "${EVENTS_NONE}"
+
 # --- e2e_ready_applied_by_trusted_actor ---
 assert_rc "e2e-ready by bot trusted" 0 e2e_ready_applied_by_trusted_actor "${EVENTS_E2E_READY_BY_BOT}"
 assert_rc "e2e-ready by human untrusted" 1 e2e_ready_applied_by_trusted_actor "${EVENTS_E2E_READY_BY_HUMAN}"
@@ -150,6 +168,12 @@ assert_eq "decide both labels prefers lgtm reason" \
   "allowed: lgtm label present" \
   "$(decide_e2e_readiness "${LABELS_BOTH}" "${REVIEWS_NONE}" "${HEAD_SHA}" "${EVENTS_NONE}")"
 assert_rc "decide lgtm overrides human CR" 0 decide_e2e_readiness "${LABELS_LGTM}" "${REVIEWS_BOT_WITH_HUMAN_CR}" "${HEAD_SHA}" "${EVENTS_NONE}"
+assert_rc "decide historical lgtm after prow strip" 0 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_NONE}" "${HEAD_SHA}" "${EVENTS_LGTM_THEN_UNLABELED}"
+assert_eq "decide historical lgtm reason" \
+  "allowed: lgtm was applied earlier" \
+  "$(decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_NONE}" "${HEAD_SHA}" "${EVENTS_LGTM_THEN_UNLABELED}")"
+assert_rc "decide historical lgtm blocked by human CR" 1 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_BOT_WITH_HUMAN_CR}" "${HEAD_SHA}" "${EVENTS_LGTM_THEN_UNLABELED}"
+assert_rc "decide unlabeled-only is not historical lgtm" 1 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_NONE}" "${HEAD_SHA}" "${EVENTS_LGTM_UNLABELED_ONLY}"
 assert_rc "decide e2e-ready by bot overrides human CR" 0 decide_e2e_readiness "${LABELS_E2E_READY}" "${REVIEWS_BOT_WITH_HUMAN_CR}" "${HEAD_SHA}" "${EVENTS_E2E_READY_BY_BOT}"
 assert_rc "decide CR alone wins" 0 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_BOT_ONLY}" "${HEAD_SHA}" "${EVENTS_NONE}"
 assert_eq "decide CR alone reason" \
@@ -160,6 +184,39 @@ assert_rc "decide denied no signals" 1 decide_e2e_readiness "${LABELS_WITHOUT}" 
 assert_rc "decide denied human approve" 1 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_HUMAN_APPROVED}" "${HEAD_SHA}" "${EVENTS_NONE}"
 assert_rc "decide denied old CR approve" 1 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_APPROVED_OLD}" "${HEAD_SHA}" "${EVENTS_NONE}"
 assert_rc "decide denied other bot" 1 decide_e2e_readiness "${LABELS_WITHOUT}" "${REVIEWS_OTHER_BOT_APPROVED}" "${HEAD_SHA}" "${EVENTS_NONE}"
+
+# --- explain_e2e_wait ---
+assert_eq "wait no CR" \
+  "waiting: no CR APPROVED on this SHA" \
+  "$(explain_e2e_wait "${LABELS_WITHOUT}" "${REVIEWS_NONE}" "${HEAD_SHA}" "${EVENTS_NONE}")"
+assert_eq "wait stale CR SHA" \
+  "waiting: CR APPROVED on older SHA old-com" \
+  "$(explain_e2e_wait "${LABELS_WITHOUT}" "${REVIEWS_APPROVED_OLD}" "${HEAD_SHA}" "${EVENTS_NONE}")"
+assert_eq "wait human CR" \
+  "waiting: human CHANGES_REQUESTED still open" \
+  "$(explain_e2e_wait "${LABELS_WITHOUT}" "${REVIEWS_BOT_WITH_HUMAN_CR}" "${HEAD_SHA}" "${EVENTS_NONE}")"
+assert_eq "wait untrusted e2e-ready" \
+  "denied: e2e-ready label present but applied by untrusted actor" \
+  "$(explain_e2e_wait "${LABELS_E2E_READY}" "${REVIEWS_NONE}" "${HEAD_SHA}" "${EVENTS_E2E_READY_BY_HUMAN}")"
+assert_eq "wait human CR beats stale SHA" \
+  "waiting: human CHANGES_REQUESTED still open" \
+  "$(explain_e2e_wait "${LABELS_WITHOUT}" "${REVIEWS_COMMENT_AFTER_CR_BOT_APPROVE}" "${HEAD_SHA}" "${EVENTS_NONE}")"
+assert_rc "coderabbit_latest_approved_commit bot only" 0 coderabbit_latest_approved_commit "${REVIEWS_BOT_ONLY}"
+assert_eq "coderabbit_latest_approved_commit sha" \
+  "head-commit" \
+  "$(coderabbit_latest_approved_commit "${REVIEWS_BOT_ONLY}")"
+assert_rc "coderabbit_latest_approved_commit none" 1 coderabbit_latest_approved_commit "${REVIEWS_NONE}"
+
+# --- write_ready_output ---
+ready_out="$(mktemp)"
+GITHUB_OUTPUT="${ready_out}" write_ready_output true
+assert_eq "write_ready_output true" "ready=true" "$(cat "${ready_out}")"
+GITHUB_OUTPUT="${ready_out}" write_ready_output false
+assert_eq "write_ready_output false appends" $'ready=true\nready=false' "$(cat "${ready_out}")"
+unset GITHUB_OUTPUT
+write_ready_output true
+assert_eq "write_ready_output no GITHUB_OUTPUT is no-op" $'ready=true\nready=false' "$(cat "${ready_out}")"
+rm -f "${ready_out}"
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed"
