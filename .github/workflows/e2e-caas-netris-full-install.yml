@@ -241,21 +241,30 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
-      - name: Push CaaS/Netris secrets to ephemeral box
+      - name: Push Netris secrets to ephemeral box
         shell: bash
         env:
           SSH_USER: ${{ needs.provision.outputs.ssh-user }}
           PUBLIC_IP: ${{ needs.provision.outputs.public-ip }}
           NETRIS_LICENSE: ${{ steps.netris-license.outputs.NETRIS_LICENSE }}
-          ROUTE53_AWS_ACCESS_KEY_ID: ${{ steps.route53-creds.outputs.ROUTE53_AWS_ACCESS_KEY_ID }}
-          ROUTE53_AWS_SECRET_ACCESS_KEY: ${{ steps.route53-creds.outputs.ROUTE53_AWS_SECRET_ACCESS_KEY }}
           AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
           PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
           LAB_NAME: ci-${{ github.run_id }}
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/push-netris-secrets.sh
+
+      - name: Push Route53 credentials to ephemeral box
+        shell: bash
+        env:
+          SSH_USER: ${{ needs.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ needs.provision.outputs.public-ip }}
+          ROUTE53_AWS_ACCESS_KEY_ID: ${{ steps.route53-creds.outputs.ROUTE53_AWS_ACCESS_KEY_ID }}
+          ROUTE53_AWS_SECRET_ACCESS_KEY: ${{ steps.route53-creds.outputs.ROUTE53_AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ inputs.aws-region }}
         run: |
           export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
-          ./scripts/ec2-runner/push-caas-netris-secrets.sh
+          ./scripts/ec2-runner/push-route53-secrets.sh
 
   e2e:
     needs: [provision, push-secrets]

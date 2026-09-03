@@ -2,7 +2,7 @@
 
 OSAC_DEPLOY_MODE ?= fresh
 EXTRA_VARS ?=
-ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_values_file=$(OSAC_VALUES_FILE)
+ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e osac_deploy_mode=$(OSAC_DEPLOY_MODE) -e osac_profile=$(OSAC_PROFILE) -e osac_values_file=values/$(OSAC_PROFILE)/instance.yaml
 ENV_INFRA := .env.infra
 
 # Suite selects CaaS vs MaaS for restore disk grow + redeploy-server.sh flow.
@@ -11,7 +11,7 @@ ENV_INFRA := .env.infra
 SUITE ?= caas
 
 OSAC_NAMESPACE ?= osac-e2e-ci
-OSAC_VALUES_FILE ?= values/caas-ci/values.yaml
+OSAC_PROFILE ?= caas-ci
 OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 
 # ─── Convenience targets ───────────────────────────────────────────
@@ -68,8 +68,9 @@ deploy-caas:
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
 	cd /opt/osac/osac-installer && make uninstall \
-		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
-		VALUES_FILE=$(OSAC_VALUES_FILE) 2>/dev/null || true
+		PLATFORM=openshift \
+		PROFILE=$(OSAC_PROFILE) \
+		NS=$(OSAC_NAMESPACE) 2>/dev/null || true
 	rm -rf /opt/osac
 	@rm -f $(ENV_INFRA)
 
@@ -109,6 +110,11 @@ destroy-bmaas:
 
 gather-bmaas:
 	ansible-playbook playbooks/gather-bmaas.yml $(ANSIBLE_EXTRA)
+
+# bmaas_networking shares infra with bmaas (same BMHs, same sushy-tools)
+setup-bmaas_networking: setup-bmaas
+destroy-bmaas_networking: destroy-bmaas
+gather-bmaas_networking: gather-bmaas
 
 # ---------------------------------------------------------------------------
 # MaaS — thin wrappers over CaaS playbooks with MaaS-specific variable overrides
@@ -169,9 +175,10 @@ prep-osac:
 
 run-osac-setup:
 	@echo "=== Installing OSAC via Helm (make install) ==="
-	cd /opt/osac/osac-installer && make install \
-		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
-		VALUES_FILE=$(OSAC_VALUES_FILE)
+	cd /opt/osac/osac-installer && KUBECONFIG=/root/.kube/config make install \
+		PLATFORM=openshift \
+		PROFILE=$(OSAC_PROFILE) \
+		NS=$(OSAC_NAMESPACE)
 
 post-osac:
 	ansible-playbook playbooks/post-osac.yml $(ANSIBLE_EXTRA)
@@ -187,7 +194,7 @@ run-refresh-osac:
 	@echo "=== Running OSAC refresh ==="
 	cd /opt/osac/osac-installer && \
 		KUBECONFIG=/root/.kube/config \
-		VALUES_FILE=$(OSAC_VALUES_FILE) \
+		VALUES_FILE=values/$(OSAC_PROFILE)/instance.yaml \
 		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
 		python3 -u scripts/refresh-after-snapshot.py
 
@@ -258,6 +265,7 @@ health-check:
         setup-maas deploy-maas destroy-maas force-destroy-maas \
         gather-infra gather-mgmt-cluster gather-caas \
         setup-bmc setup-bmaas destroy-bmaas gather-bmaas \
+        setup-bmaas_networking destroy-bmaas_networking gather-bmaas_networking \
         install-osac prep-osac run-osac-setup post-osac \
         refresh-osac prep-refresh-osac run-refresh-osac post-refresh-osac \
         connectivity vendor-update lint cleanup-dns \

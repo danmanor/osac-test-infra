@@ -31,6 +31,10 @@
     value: "0"
     sysctl_set: true
 
+- name: Disable STP on virbr0 (physical NICs in VEPA mode cause STP port blocking)
+  ansible.builtin.command: ip link set dev virbr0 type bridge stp_state 0
+  changed_when: true
+
 - name: Flush restrictive libvirt nftables chains
   ansible.builtin.shell: |
     nft flush chain ip filter LIBVIRT_FWI 2>/dev/null || true
@@ -59,6 +63,8 @@
     - "{{ ns_fabric.mgmt_subnet }}"
     - "{{ nat_cidr }}"
     - "{{ l4lb_cidr }}"
+    - "{{ osac_external_ip_pool_cidr }}"
+    - "{{ bmaas_provisioning_snat_cidr }}"
 
 # k3s_controller's vendored "Verify controller API" task hits the same
 # OpenSSL CA-cert-loading bug documented in playbooks/deploy-infra.yml's own
@@ -84,6 +90,15 @@
       ansible.builtin.include_role:
         name: k3s_controller
 
+- name: Ensure virbr0 is in firewalld trusted zone
+  ansible.posix.firewalld:
+    zone: trusted
+    interface: virbr0
+    permanent: true
+    immediate: true
+    state: enabled
+  when: ansible_facts.services['firewalld.service'] is defined
+
 - name: Deploy network topology
   ansible.builtin.include_role:
     name: topology
@@ -95,6 +110,17 @@
 - name: Configure connectivity
   ansible.builtin.include_role:
     name: connectivity
+
+- name: Route OSAC traffic via ISP server (isolated mode)
+  when: connectivity_mode == "isolated"
+  ansible.builtin.command: >-
+    ip route replace {{ item }}
+    via {{ bgp_link_subnet | ansible.utils.ipaddr('network') | ansible.utils.ipmath(2) }}
+    dev {{ public_bridge_name }}
+  loop:
+    - "{{ osac_external_ip_pool_cidr }}"
+    - "{{ bmaas_provisioning_snat_cidr }}"
+  changed_when: true
 
 - name: Verify netris-lab deployment
   ansible.builtin.include_role:

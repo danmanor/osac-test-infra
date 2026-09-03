@@ -102,6 +102,11 @@ func main() {
 			if dnsServer == "" {
 				dnsServer = "8.8.8.8"
 			}
+			vmRootPasswordHash := conf.Get("vm_root_password_hash")
+			if vmRootPasswordHash == "" {
+				vmRootPasswordHash = "$6$netrislab$5/Mp4SqWPZ0K4b5.CgvmirF5rn0M34HmAUPxgr2DP8FwVzPP/OeoIq6m8Ljwzsr138kz4LWdOjvqiQ1Nes5JE."
+			}
+			bmcNetwork := conf.Get("bmc_network")
 			netrisInfo, err := getFromNetris(ctx, ctlCfg, serversGW, aptRepo)
 			if err != nil {
 				return err
@@ -276,6 +281,7 @@ func main() {
 			// fmt.Println(jsonString)
 
 			var domains []*libvirt.Domain
+			var bmcNetworkIDs = make(map[string]pulumi.IDOutput)
 
 			for hyperHost, hyperVms := range hypervisorToVMs {
 				err := acceptSshKey(hyperHost)
@@ -288,6 +294,23 @@ func main() {
 				if err != nil {
 					return err
 				}
+
+				if bmcNetwork != "" {
+					bmcNet, err := libvirt.NewNetwork(ctx, fmt.Sprintf("%s-%s", hyperHost, bmcNetwork), &libvirt.NetworkArgs{
+						Name:      pulumi.String(bmcNetwork),
+						Mode:      pulumi.String("none"),
+						Autostart: pulumi.Bool(true),
+						Addresses: pulumi.StringArray{pulumi.String("10.99.0.1/24")},
+						Dhcp: libvirt.NetworkDhcpArgs{
+							Enabled: pulumi.Bool(true),
+						},
+					}, pulumi.Provider(provider))
+					if err != nil {
+						return err
+					}
+					bmcNetworkIDs[hyperHost] = bmcNet.ID()
+				}
+
 				// Get the default Pool
 				pool_name := pulumi.String("default").ToStringOutput()
 				installedPackages := []string{"lldpd"}
@@ -306,6 +329,7 @@ func main() {
 					"ctlInfo":           netrisInfo.ControllerInfo,
 					"links":             hypervisorToLinks,
 					"dnsServer":         dnsServer,
+					"passwordHash":      vmRootPasswordHash,
 				}, "mgmt-server")
 				if err != nil {
 					return err
@@ -319,6 +343,8 @@ func main() {
 					"installedPackages": installedPackages,
 					"ctlInfo":           netrisInfo.ControllerInfo,
 					"dnsServer":         dnsServer,
+					"bmcNetwork":        bmcNetwork,
+					"passwordHash":      vmRootPasswordHash,
 				}, "server")
 				if err != nil {
 					return err
@@ -333,6 +359,7 @@ func main() {
 					"allVms":            hypervisorToVMs,
 					"ctlInfo":           netrisInfo.ControllerInfo,
 					"dnsServer":         dnsServer,
+					"passwordHash":      vmRootPasswordHash,
 				}, "softgate")
 				if err != nil {
 					return err
@@ -411,6 +438,7 @@ func main() {
 						"netrisASN":             netrisInfo.SiteObject.PublicAsn,
 						"bgpPassword":           conf.Get("bgp_password"),
 						"dnsServer":             dnsServer,
+							"passwordHash":          vmRootPasswordHash,
 					}, "isp-server")
 					if err != nil {
 						return err
@@ -433,6 +461,7 @@ func main() {
 						"netrisASN":             netrisInfo.SiteObject.PublicAsn,
 						"bgpPassword":           conf.Get("bgp_password"),
 						"dnsServer":             dnsServer,
+							"passwordHash":          vmRootPasswordHash,
 					}, "isp-server")
 					if err != nil {
 						return err
@@ -507,6 +536,13 @@ func main() {
 								Bridge: pulumi.String("br-mgmt"),
 								Mac:    pulumi.String(vmSpec.MacAddress),
 							},
+						}
+						if bmcNetwork != "" {
+							if netID, ok := bmcNetworkIDs[hyperHost]; ok {
+								bridgeForServer = append(bridgeForServer, libvirt.DomainNetworkInterfaceArgs{
+									NetworkId: netID.ToStringOutput(),
+								})
+							}
 						}
 					case "softgate":
 						vmResource.vcpu = setResource(-1, conf.GetInt("softgate_vcpu"), 2, false)

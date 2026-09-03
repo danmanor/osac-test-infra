@@ -8,6 +8,12 @@ gpu_server_hostname: "hgx"
 site_name: "Datacenter-1"
 ew_fabric_enable: 0                     # 0 to disable East-West fabric (NS-only mode)
 
+# Workaround: Netris ACL default-deny blocks DHCP relay responses on softgates
+# because KEA replies to the leaf loopback (10.2.0.0/16), which falls outside
+# the V-Net subnet CIDR and can't be permitted via Netris ACL rules. Set to
+# "permit" until the Netris DHCP relay + ACL interaction is fixed upstream.
+acl_default_policy: "permit"
+
 # --- Netris Controller ---
 netris_controller_chart_version: "2.8.1"
 netris_controller_images:
@@ -17,7 +23,7 @@ netris_controller_images:
   telescope: "4.9.0.002"
   migration: "4.9.0"
 netris_login: "netris"
-netris_password: "netris"
+# netris_password: set in your local config — no default for security
 netris_validate_certs: false
 netris_timeout: 30
 
@@ -83,7 +89,8 @@ ns_fabric:
   oob_gpu_per_switch: 4
   oob_uplink_into_spine: 1
   softgate_count: 4
-  softgate_roles: '["general", "general", "general", "general"]'
+  softgate_roles: '["general", "general", "snat", "snat"]'
+  bgp_prefix_list_outbound: "permit 0.0.0.0/0 le 32"
   softgate_leaf_list: "[0, 1]"
   softgate_node_type: "softgate_hs"     # installer requires _hs to find the package; dpdk disabled post-install
   leaf_to_softgate_start_port: 176
@@ -105,11 +112,11 @@ hypers_ssh_user: "root"
 
 # --- VM Resources ---
 switch_vcpu: 4
-switch_memory: 2048              # MB
+switch_memory: 8192              # MB
 server_vcpu: 1
 server_memory: 1024              # MB
 softgate_vcpu: 2
-softgate_memory: 4096            # MB
+softgate_memory: 8192            # MB
 
 # --- SSH keys (leave empty to auto-detect from /root/.ssh/id_rsa.pub) ---
 ssh_auth_keys: []

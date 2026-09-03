@@ -1,0 +1,465 @@
+---
+name: E2E BMaaS Netris Full Install
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      instance-type:
+        description: "EC2 instance type"
+        required: false
+        type: string
+        default: "c5n.metal"
+      aws-region:
+        description: "AWS region to launch into"
+        required: false
+        type: string
+        default: "us-east-1"
+      orchestrator-runner-label:
+        description: "Self-hosted runner label for the orchestrator"
+        required: false
+        type: string
+        default: "osac-ci-orchestrator"
+      tooling-check-cmds:
+        description: "Semicolon-separated commands to run/verify on the box before JIT registration."
+        required: false
+        type: string
+        default: "dnf install -y ansible-core python3-pip make; pip3 install ansible; command -v ansible-playbook; command -v make"
+      osac-operator-image:
+        description: "Override osac-operator image (registry-pullable reference) -- empty means no override"
+        required: false
+        type: string
+        default: ""
+      fulfillment-service-image:
+        description: "Override fulfillment-service image (registry-pullable reference) -- empty means no override"
+        required: false
+        type: string
+        default: ""
+      osac-aap-ee-image:
+        description: "Override osac-aap execution-environment image (registry-pullable reference) -- empty means no override"
+        required: false
+        type: string
+        default: ""
+      bmf-operator-image:
+        description: "Override bare-metal-fulfillment-operator image (registry-pullable reference) -- empty means no override"
+        required: false
+        type: string
+        default: ""
+      osac-repo:
+        description: "Override osac mono-repo git URI -- empty means upstream"
+        required: false
+        type: string
+        default: ""
+      osac-branch:
+        description: "Branch, tag, or commit of the osac mono-repo to clone -- empty means main"
+        required: false
+        type: string
+        default: ""
+      components:
+        description: >-
+          JSON array of components to build from source on the EC2 box and
+          load onto the SNO node. Each entry: repo, ref, containerfile,
+          imageKey (Helm value path), optional buildType ("ansible-builder"),
+          and optional context (build context directory relative to repo root;
+          defaults to the containerfile's parent directory).
+          Empty array (default) builds nothing from source.
+        required: false
+        type: string
+        default: "[]"
+      test-infra-repository:
+        description: "Repository to checkout for actions and scripts (for cross-repo calls)"
+        required: false
+        type: string
+        default: ""
+      fork-pr-author-association:
+        description: "PR author_association from the caller"
+        required: false
+        type: string
+        default: ""
+      fork-pr-author:
+        description: "GitHub login of the PR author (for fork PR org membership check)"
+        required: false
+        type: string
+        default: ""
+      pr-number:
+        description: "PR number (for label-based authorization check)"
+        required: false
+        type: string
+        default: ""
+    outputs:
+      result:
+        description: "Overall result: PASSED or FAILED"
+        value: ${{ jobs.e2e.outputs.result }}
+
+jobs:
+  authorize:
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ inputs.test-infra-repository || github.repository }}
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Authorize fork PR
+        if: inputs.fork-pr-author-association != ''
+        uses: ./.github/actions/authorize-fork-pr
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+          fork-pr-author: ${{ inputs.fork-pr-author }}
+          pr-number: ${{ inputs.pr-number }}
+
+  provision:
+    needs: authorize
+    uses: ./.github/workflows/ec2-runner-provision.yml
+    permissions:
+      contents: read
+    with:
+      instance-type: ${{ inputs.instance-type }}
+      aws-region: ${{ inputs.aws-region }}
+      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
+      tooling-check-cmds: ${{ inputs.tooling-check-cmds }}
+      test-infra-repository: ${{ inputs.test-infra-repository }}
+
+  push-secrets:
+    needs: provision
+    runs-on: ${{ inputs.orchestrator-runner-label }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      KNOWN_HOSTS_FILE: /tmp/osac-ec2-known-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ inputs.test-infra-repository || github.repository }}
+          persist-credentials: false
+
+      - name: Validate and bootstrap
+        id: setup
+        uses: ./.github/actions/validate-and-bootstrap
+        with:
+          test-suite: ec2-runner
+          run-id: ${{ github.run_id }}
+
+      - name: Fetch pull secret and AAP license from Vault
+        id: vault-secrets
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+        with:
+          url: http://127.0.0.1:8200
+          method: approle
+          roleId: ${{ steps.setup.outputs.role-id }}
+          secretId: ${{ steps.setup.outputs.secret-id }}
+          exportEnv: false
+          secrets: |
+            secret/data/osac/e2e/pull-secret dockerconfigjson | PULL_SECRET ;
+            secret/data/osac/e2e/aap-license license | AAP_LICENSE
+
+      - name: Write pull secret and AAP license to temp files
+        shell: bash
+        env:
+          PULL_SECRET: ${{ steps.vault-secrets.outputs.PULL_SECRET }}
+          AAP_LICENSE: ${{ steps.vault-secrets.outputs.AAP_LICENSE }}
+        run: |
+          printf '%s' "${PULL_SECRET}" > "$RUNNER_TEMP/pull-secret.json"
+          chmod 600 "$RUNNER_TEMP/pull-secret.json"
+          printf '%s' "${AAP_LICENSE}" | base64 -d > "$RUNNER_TEMP/aap-license.zip"
+          chmod 600 "$RUNNER_TEMP/aap-license.zip"
+
+      - name: Fetch Netris license
+        id: netris-license
+        uses: ./.github/actions/fetch-netris-license
+        with:
+          role-id: ${{ steps.setup.outputs.role-id }}
+          secret-id: ${{ steps.setup.outputs.secret-id }}
+
+      - name: Push Netris secrets to ephemeral box
+        shell: bash
+        env:
+          SSH_USER: ${{ needs.provision.outputs.ssh-user }}
+          PUBLIC_IP: ${{ needs.provision.outputs.public-ip }}
+          NETRIS_LICENSE: ${{ steps.netris-license.outputs.NETRIS_LICENSE }}
+          AAP_LICENSE_ZIP_PATH: ${{ runner.temp }}/aap-license.zip
+          PULL_SECRET_JSON_PATH: ${{ runner.temp }}/pull-secret.json
+          LAB_NAME: ci-${{ github.run_id }}
+        run: |
+          export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"
+          ./scripts/ec2-runner/push-netris-secrets.sh
+
+  e2e:
+    needs: [provision, push-secrets]
+    runs-on: ${{ needs.provision.outputs.runner-label }}
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ inputs.test-infra-repository || github.repository }}
+          persist-credentials: false
+
+      - name: Validate component image override inputs
+        shell: bash
+        env:
+          OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
+          FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
+          OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
+          BMF_OPERATOR_IMAGE: ${{ inputs.bmf-operator-image }}
+          OSAC_REPO: ${{ inputs.osac-repo }}
+          OSAC_BRANCH: ${{ inputs.osac-branch }}
+        run: |
+          for name in OSAC_OPERATOR_IMAGE FULFILLMENT_SERVICE_IMAGE OSAC_AAP_EE_IMAGE BMF_OPERATOR_IMAGE OSAC_REPO; do
+            value="${!name}"
+            if [[ -n "$value" ]] && [[ ! "$value" =~ ^[A-Za-z0-9._/:@-]+$ ]]; then
+              echo "::error::${name} contains characters outside a valid reference (letters, digits, and ._/:@- only): ${value}"
+              exit 1
+            fi
+          done
+          for name in OSAC_BRANCH; do
+            value="${!name}"
+            if [[ -n "$value" ]]; then
+              if [[ ! "$value" =~ ^[A-Za-z0-9._/@-]+$ ]]; then
+                echo "::error::${name} contains characters outside a valid branch name (letters, digits, and ._/@- only): ${value}"
+                exit 1
+              fi
+              if ! git check-ref-format --branch "$value" >/dev/null 2>&1; then
+                echo "::error::${name} is not a valid git branch name: ${value}"
+                exit 1
+              fi
+            fi
+          done
+
+      - name: Build component image overrides
+        id: extra-vars
+        shell: bash
+        env:
+          OSAC_OPERATOR_IMAGE: ${{ inputs.osac-operator-image }}
+          FULFILLMENT_SERVICE_IMAGE: ${{ inputs.fulfillment-service-image }}
+          OSAC_AAP_EE_IMAGE: ${{ inputs.osac-aap-ee-image }}
+          BMF_OPERATOR_IMAGE: ${{ inputs.bmf-operator-image }}
+          OSAC_REPO: ${{ inputs.osac-repo }}
+          OSAC_BRANCH: ${{ inputs.osac-branch }}
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo dnf install -y jq
+          fi
+          EXTRA_VARS='{"bare_metal_services":true}'
+          declare -A OVERRIDES=(
+            [osac_operator_image]="$OSAC_OPERATOR_IMAGE"
+            [fulfillment_service_image]="$FULFILLMENT_SERVICE_IMAGE"
+            [osac_aap_image]="$OSAC_AAP_EE_IMAGE"
+            [osac_bmf_image]="$BMF_OPERATOR_IMAGE"
+            [osac_repo]="$OSAC_REPO"
+            [osac_branch]="$OSAC_BRANCH"
+          )
+          for key in "${!OVERRIDES[@]}"; do
+            value="${OVERRIDES[$key]}"
+            if [ -n "$value" ]; then
+              EXTRA_VARS=$(echo "$EXTRA_VARS" | jq -c --arg k "$key" --arg v "$value" '. + {($k): $v}')
+              echo "Component image override: ${key}=${value}"
+            fi
+          done
+          echo "json=${EXTRA_VARS}" >> "$GITHUB_OUTPUT"
+
+      - name: Stage secrets into place
+        shell: bash
+        env:
+          NETRIS_DIR: infra/netris
+        run: ./scripts/ec2-runner/stage-caas-netris-secrets.sh
+
+      - name: Install prerequisites and cache images
+        shell: bash
+        timeout-minutes: 30
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make setup-infra INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${EXTRA_VARS}"
+
+      - name: Add osac CLI to PATH
+        shell: bash
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Deploy Netris lab
+        shell: bash
+        timeout-minutes: 45
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make deploy-infra INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${EXTRA_VARS}"
+
+      - name: Deploy OCP from snapshot
+        shell: bash
+        timeout-minutes: 60
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make deploy-ocp INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${EXTRA_VARS}"
+
+      - name: Build and load component images
+        if: inputs.components != '[]' && inputs.components != ''
+        id: components
+        timeout-minutes: 30
+        shell: bash
+        env:
+          COMPONENTS_JSON: ${{ inputs.components }}
+          KUBECONFIG: /root/.kube/config
+        run: |
+          COUNT=$(echo "${COMPONENTS_JSON}" | jq 'length')
+          IMAGE_OVERRIDES="{}"
+          NODE_NAME=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
+
+          declare -A REPO_PINNED_SHA
+
+          for i in $(seq 0 $((COUNT - 1))); do
+            repo=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].repo")
+            ref=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].ref")
+            file=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].containerfile // \"Containerfile\"")
+            image_key=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].imageKey")
+            build_type=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].buildType // \"containerfile\"")
+            context=$(echo "${COMPONENTS_JSON}" | jq -r ".[$i].context // empty")
+
+            tag="localhost/component-${i}:${GITHUB_RUN_ID}"
+            src="$RUNNER_TEMP/component-${i}-src"
+
+            echo "::group::Build component[$i]: ${repo}@${ref} (${file})"
+            if [[ -n "${REPO_PINNED_SHA[$repo]:-}" ]]; then
+              sha="${REPO_PINNED_SHA[$repo]}"
+              echo "Cloning ${repo} at pinned SHA ${sha} (first clone resolved this from ref '${ref}')."
+              git init "${src}"
+              git -C "${src}" fetch --depth 1 "https://github.com/${repo}.git" "${sha}"
+              git -C "${src}" checkout FETCH_HEAD
+            else
+              git init "${src}"
+              git -C "${src}" fetch --depth 1 "https://github.com/${repo}.git" "${ref}"
+              git -C "${src}" checkout FETCH_HEAD
+              sha=$(git -C "${src}" rev-parse HEAD)
+              REPO_PINNED_SHA[$repo]="${sha}"
+              echo "Pinned ${repo} to SHA ${sha} (resolved from ref '${ref}')."
+            fi
+
+            component_dir="${src}"
+            build_context="${src}"
+            containerfile_name="${file}"
+            if [[ "${file}" == */* ]]; then
+              component_dir="${src}/$(dirname "${file}")"
+              containerfile_name="$(basename "${file}")"
+            fi
+            if [[ -n "${context}" ]]; then
+              build_context="${src}/${context}"
+            else
+              build_context="${component_dir}"
+            fi
+
+            if [[ "${build_type}" == "ansible-builder" ]]; then
+              pip3 install --quiet 'ansible-builder~=3.0'
+              ansible-builder create --file "${component_dir}/${containerfile_name}" --context "${component_dir}/context"
+              podman build -t "${tag}" -f "${component_dir}/context/Containerfile" "${component_dir}/context"
+            else
+              podman build -t "${tag}" -f "${component_dir}/${containerfile_name}" "${build_context}"
+            fi
+
+            echo "Loading ${tag} onto node ${NODE_NAME}..."
+            podman save "${tag}" | oc debug "node/${NODE_NAME}" -t=false -- chroot /host podman load
+
+            case "${image_key}" in
+              service.images.service)      var_name="fulfillment_service_image" ;;
+              operator.image.repository)   var_name="osac_operator_image" ;;
+              aap.bootstrap.image)         var_name="osac_aap_image" ;;
+              aap.configAsCode.eeImage)    var_name="osac_aap_ee_image" ;;
+              bmf.image.repository)        var_name="osac_bmf_image" ;;
+              *)
+                echo "::error::components[$i].imageKey '${image_key}' is not a recognized override key"
+                exit 1
+                ;;
+            esac
+
+            IMAGE_OVERRIDES=$(echo "${IMAGE_OVERRIDES}" | jq -c --arg k "${var_name}" --arg v "${tag}" '. + {($k): $v}')
+            echo "Built ${var_name}=${tag}"
+            echo "::endgroup::"
+          done
+
+          echo "overrides=${IMAGE_OVERRIDES}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy OSAC
+        timeout-minutes: 90
+        shell: bash
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+          COMPONENT_OVERRIDES: ${{ steps.components.outputs.overrides || '{}' }}
+        run: |
+          MERGED=$(echo "${EXTRA_VARS}" | jq -c ". + ${COMPONENT_OVERRIDES}")
+          make deploy-osac INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${MERGED}"
+
+      - name: Setup BMaaS hosts and catalog
+        shell: bash
+        timeout-minutes: 30
+        env:
+          EXTRA_VARS: ${{ steps.extra-vars.outputs.json }}
+        run: make setup-suite INFRA=netris SUITE=bmaas_networking OSAC_PROFILE=bmaas-ci EXTRA_VARS="${EXTRA_VARS}"
+
+      - name: Run BMaaS networking tests
+        id: test
+        timeout-minutes: 60
+        shell: bash
+        run: make run-tests INFRA=netris SUITE=bmaas_networking
+
+      - name: Gather infra diagnostics
+        if: always()
+        shell: bash
+        timeout-minutes: 10
+        continue-on-error: true
+        run: make gather-infra INFRA=netris
+
+      - name: Gather management cluster diagnostics
+        if: always()
+        shell: bash
+        timeout-minutes: 10
+        continue-on-error: true
+        run: make -C infra/netris gather-mgmt-cluster
+
+      - name: Gather BMaaS diagnostics
+        if: always()
+        shell: bash
+        timeout-minutes: 10
+        continue-on-error: true
+        run: make gather-suite INFRA=netris SUITE=bmaas_networking
+
+      - name: Upload artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bmaas-netris-artifacts
+          path: infra/netris/logs/
+          if-no-files-found: ignore
+
+      - name: Gather EC2 runner artifacts
+        if: always()
+        uses: ./.github/actions/gather-ec2-runner-artifacts
+
+  teardown:
+    needs: [provision, push-secrets, e2e]
+    if: always()
+    uses: ./.github/workflows/ec2-runner-teardown.yml
+    permissions:
+      contents: read
+    with:
+      instance-id: ${{ needs.provision.outputs.instance-id }}
+      runner-id: ${{ needs.provision.outputs.runner-id }}
+      orchestrator-runner-label: ${{ inputs.orchestrator-runner-label }}
+      aws-region: ${{ inputs.aws-region }}
+      test-infra-repository: ${{ inputs.test-infra-repository }}

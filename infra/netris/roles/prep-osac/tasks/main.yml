@@ -1,24 +1,9 @@
 ---
-- name: Download kubeconfig if missing
-  ansible.builtin.command:
-    cmd: aicli -u {{ assisted_service_url }} download kubeconfig {{ ocp_cluster_name }} --path /root/
-    creates: "/root/kubeconfig.{{ ocp_cluster_name }}"
-
-- name: Ensure .kube directory exists
-  ansible.builtin.file:
-    path: /root/.kube
-    state: directory
-    mode: "0700"
-
-- name: Copy kubeconfig to default location
-  ansible.builtin.copy:
-    src: "/root/kubeconfig.{{ ocp_cluster_name }}"
-    dest: /root/.kube/config
-    remote_src: true
-    mode: "0600"
-    force: false
-
-# --- Clone osac mono-repo ---
+- name: Verify kubeconfig exists
+  ansible.builtin.stat:
+    path: /root/.kube/config
+  register: _kubeconfig
+  failed_when: not _kubeconfig.stat.exists
 
 - name: Clone osac
   ansible.builtin.git:
@@ -90,7 +75,7 @@
 - name: Build resource class map
   ansible.builtin.set_fact:
     _netris_resource_class_map: >-
-      {"{{ caas_host_type_id }}":{"server_cluster_template_id":{{ _netris_sct_id }},"mgmt_interface":"ens4","vpc_interfaces":["ens5"]}}
+      {"{{ caas_host_type_id }}":{"server_cluster_template_id":{{ _netris_sct_id }},"mgmt_interface":"ens4","vpc_interfaces":["ens6"]}}
 
 # --- Read SSH private key for instance group secrets ---
 
@@ -117,15 +102,18 @@
     src: "{{ osac_installer_dir }}/{{ osac_values_file }}"
   register: _values_raw
 
+# Operator enablement (cnv, mce, metallb) is intentionally NOT overridden here:
+# each values profile declares what it needs (e.g. bmaas-ci disables cnv/mce/metallb,
+# vmaas-ci disables mce, caas-ci disables cnv). Force-enabling them clobbered the
+# profile and installed CNV on BMaaS, whose golden-image DataVolumes filled the LVMS
+# pool and starved the AAP postgres PVC. lvms/bundledPostgres stay overridden because
+# every profile needs them (lvms also gets the OCP-version-matched channel here).
 - name: Build values overrides
   ansible.builtin.set_fact:
     _values_overrides: >-
       {{ {'cliImage': _ocp_cli_image.stdout | trim,
           'bundledPostgres': {'enabled': true},
           'lvms': {'enabled': true, 'channel': 'stable-' + ocp_version},
-          'metallb': {'enabled': true},
-          'cnv': {'enabled': true},
-          'mce': {'enabled': true},
           'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}},
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
               'NETWORK_CLASS': 'netris',
@@ -143,6 +131,7 @@
               'NETRIS_TENANT_NAME': 'Admin',
               'NETRIS_MGMT_VPC_ID': _netris_mgmt_vpc_id | string,
               'NETRIS_MGMT_VPC_NAME': ocp_vpc_name,
+              'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name,
               'NETRIS_RESOURCE_CLASS_MAP': _netris_resource_class_map | to_json,
               'SERVER_MGMT_ROUTE_DESTINATION': '192.168.16.0/20',
               'SERVER_MGMT_ROUTE_GATEWAY': '192.168.16.1',
@@ -163,7 +152,8 @@
               'NETRIS_USERNAME': netris_username,
               'NETRIS_SITE_ID': _netris_site_id | string,
               'NETRIS_TENANT_ID': '1',
-              'NETRIS_TENANT_NAME': 'Admin'
+              'NETRIS_TENANT_NAME': 'Admin',
+              'NETRIS_BM_PROVISIONING_VNET': bmaas_provisioning_vnet_name
             }, 'secret': {
               'NETRIS_PASSWORD': netris_password
             }}
@@ -194,6 +184,10 @@
                'pullPolicy': ('IfNotPresent' if bmf_operator_image.startswith('localhost/') else 'Always')
              }}}
                     if bmf_operator_image | default('') | length > 0 else {}), recursive=true)
+         | combine(({'aap': {'configAsCode': {'projectGitUri': aap_project_git_uri}}}
+                    if aap_project_git_uri | default('') | length > 0 else {}), recursive=true)
+         | combine(({'aap': {'configAsCode': {'projectGitBranch': aap_project_git_branch}}}
+                    if aap_project_git_branch | default('') | length > 0 else {}), recursive=true)
       }}
 
 - name: Write patched values file
@@ -260,55 +254,23 @@
   failed_when: false
   changed_when: _ns_create.rc == 0
 
-- name: Create BMF inventory config secret
+- name: Ensure Provisioning CR exists for Metal3 validation
   when: bare_metal_services | bool
   ansible.builtin.shell:
     cmd: |
-      oc apply -f - <<'EOF'
-      apiVersion: v1
-      kind: Secret
+      oc apply -f - <<EOF
+      apiVersion: metal3.io/v1alpha1
+      kind: Provisioning
       metadata:
-        name: osac-inventory-config
-        namespace: {{ osac_namespace }}
-      type: Opaque
-      stringData:
-        inventory.yaml: |
-          name: metal3-inventory
-          type: metal3
-          hostClass: metal3
-          networkClass: metal3
-          options:
-            metal3:
-              namespace: {{ bmaas_bmh_namespace }}
+        name: provisioning-configuration
+      spec:
+        provisioningNetwork: "Disabled"
+        watchAllNamespaces: true
       EOF
   environment:
     KUBECONFIG: /root/.kube/config
-  register: _inv_secret
-  changed_when: "'created' in _inv_secret.stdout or 'configured' in _inv_secret.stdout"
-
-- name: Create BMF management config secret
-  when: bare_metal_services | bool
-  ansible.builtin.shell:
-    cmd: |
-      oc apply -f - <<'EOF'
-      apiVersion: v1
-      kind: Secret
-      metadata:
-        name: osac-management-config
-        namespace: {{ osac_namespace }}
-      type: Opaque
-      stringData:
-        management.yaml: |
-          name: metal3-management
-          type: metal3
-          options:
-            metal3:
-              namespace: {{ bmaas_bmh_namespace }}
-      EOF
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _mgmt_secret
-  changed_when: "'created' in _mgmt_secret.stdout or 'configured' in _mgmt_secret.stdout"
+  register: _prov_cr
+  changed_when: "'created' in _prov_cr.stdout or 'configured' in _prov_cr.stdout"
 
 - name: Report OSAC preparation complete
   ansible.builtin.debug:

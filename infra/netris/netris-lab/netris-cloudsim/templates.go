@@ -86,10 +86,17 @@ ethernets:
   ens4:
     dhcp4: true
     dhcp6: false
+    critical: true
     mtu: {{ .mtu }}
     nameservers:
       addresses:
         - {{ .dnsServer }}
+{{- if .bmcNetwork }}
+  ens5:
+    dhcp4: true
+    dhcp6: false
+    optional: true
+{{- end }}
 `)
 		if err != nil {
 			panic(err)
@@ -109,7 +116,7 @@ manage_etc_hosts: true
 users:
   - name: root
     lock_passwd: false
-    hashed_passwd: $6$SX2xaqo0V5Z3duvX$1UXpCr.x.XV7PJkARgqoh9r6LlHXofX99IcX9.NCnfTedHoBVe1CBwsRgcCbvKqkzwo7tiKe2k4Z75uRxnafE/
+    hashed_passwd: {{ .passwordHash }}
     ssh_authorized_keys:
     {{- range $item := .sshAuthKey }}
       - {{ $item }}
@@ -405,6 +412,7 @@ ethernets:
   ens4:
     dhcp4: true
     dhcp6: false
+    critical: true
     mtu: {{ .mtu }}
     nameservers:
       addresses:
@@ -429,7 +437,7 @@ manage_etc_hosts: true
 users:
   - name: root
     lock_passwd: false
-    hashed_passwd: $6$SX2xaqo0V5Z3duvX$1UXpCr.x.XV7PJkARgqoh9r6LlHXofX99IcX9.NCnfTedHoBVe1CBwsRgcCbvKqkzwo7tiKe2k4Z75uRxnafE/
+    hashed_passwd: {{ .passwordHash }}
     ssh_authorized_keys:
     {{- range $item := .sshAuthKey }}
       - {{ $item }}
@@ -492,13 +500,19 @@ runcmd:
         done
     }
 
-    MAINIP=$(grep -w "^$(hostname)" /tmp/netris-devices | awk '{print $2}')
+    # Match this VM's entry by mgmt IP (ens4) rather than hostname, since
+    # networkd acquires the DHCP lease — not dhclient — so the dhclient
+    # exit hook that sets the hostname from DHCP never fires.
+    MY_IP=$(ip -4 addr show ens4 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+    ENTRY=$(awk -v ip="$MY_IP" '$3 == ip {print; exit}' /etc/netris-devices)
 
-    if [ -z "$MAINIP" ]; then
+    if [ -z "$ENTRY" ]; then
         exit 0
     fi
 
-    HOSTNAME=$(hostname)
+    HOSTNAME=$(echo "$ENTRY" | awk '{print $1}')
+    MAINIP=$(echo "$ENTRY" | awk '{print $2}')
+    hostnamectl set-hostname "$HOSTNAME"
     echo hostname: $HOSTNAME
     AUTHKEY={{ $dot.ctlInfo.AuthKey }}
     VERSION={{ $dot.ctlInfo.Version }}
@@ -506,11 +520,17 @@ runcmd:
 
     bash /etc/network_nics_up.sh
 
+    # The installer's netris-sg-hs postinst disables systemd-resolved.
+    # On Ubuntu, resolv.conf is a symlink to resolved's stub — once
+    # resolved stops, DNS breaks and the remaining apt installs fail.
+    # Replace the symlink with a static file before the installer runs.
+    rm -f /etc/resolv.conf
+    echo 'nameserver {{ .dnsServer }}' > /etc/resolv.conf
+
     curl -fsSL https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --node-type softgate_hs --apt-repo $APT_REPO --debug
 
-    # Installer hardcodes 'nameserver 1.1.1.1' and removes isc-dhcp-client
-    echo 'nameserver {{ .dnsServer }}' | tee /etc/resolv.conf
-    apt-get install -y isc-dhcp-client 2>/dev/null || true
+    # Installer hardcodes DNS to 1.1.1.1 — restore lab DNS
+    echo 'nameserver {{ .dnsServer }}' > /etc/resolv.conf
 
     reboot
 
@@ -533,13 +553,13 @@ write_files:
               ethtool -s $nic speed 1000 duplex full
           fi
       done
-  - path: /tmp/netris-devices
+  - path: /etc/netris-devices
     permissions: '0644'
     content: |
     {{- range $hyper := $dot.allVms }}
       {{- range $eachvm := $hyper }}
         {{- if eq $eachvm.Type "softgate" }}
-      {{ $eachvm.Name }} {{ $eachvm.MainAddress }}
+      {{ $eachvm.Name }} {{ $eachvm.MainAddress }} {{ index (splitList "/" $eachvm.MgmtAddress) 0 }}
         {{- end }}
       {{- end }}
     {{- end }}
@@ -625,7 +645,7 @@ manage_etc_hosts: true
 users:
   - name: root
     lock_passwd: false
-    hashed_passwd: $6$SX2xaqo0V5Z3duvX$1UXpCr.x.XV7PJkARgqoh9r6LlHXofX99IcX9.NCnfTedHoBVe1CBwsRgcCbvKqkzwo7tiKe2k4Z75uRxnafE/
+    hashed_passwd: {{ .passwordHash }}
     ssh_authorized_keys:
     {{- range $item := .sshAuthKey }}
       - {{ $item }}
@@ -823,7 +843,7 @@ manage_etc_hosts: true
 users:
   - name: root
     lock_passwd: false
-    hashed_passwd: $6$SX2xaqo0V5Z3duvX$1UXpCr.x.XV7PJkARgqoh9r6LlHXofX99IcX9.NCnfTedHoBVe1CBwsRgcCbvKqkzwo7tiKe2k4Z75uRxnafE/
+    hashed_passwd: {{ .passwordHash }}
     ssh_authorized_keys:
     {{- range $item := .sshAuthKey }}
       - {{ $item }}
@@ -1008,7 +1028,7 @@ manage_etc_hosts: true
 users:
   - name: root
     lock_passwd: false
-    hashed_passwd: $6$SX2xaqo0V5Z3duvX$1UXpCr.x.XV7PJkARgqoh9r6LlHXofX99IcX9.NCnfTedHoBVe1CBwsRgcCbvKqkzwo7tiKe2k4Z75uRxnafE/
+    hashed_passwd: {{ .passwordHash }}
     ssh_authorized_keys:
     {{- range $item := .sshAuthKey }}
       - {{ $item }}
@@ -1122,7 +1142,7 @@ write_files:
       echo "cumulus ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/10_cumulus
 
 
-      tee /tmp/netris-devices <<EOF
+      tee /etc/netris-devices <<EOF
       {{- range $hyper := $dot.allVms }}
         {{- range $eachvm := $hyper }}
           {{- if eq $eachvm.Type "switch" }}
@@ -1181,13 +1201,13 @@ write_files:
       sudo update-initramfs -u
 
 
-      MAINIP=$(grep -w "^$(hostname)" /tmp/netris-devices | awk '{print $2}')
+      MAINIP=$(grep -w "^$(hostname)" /etc/netris-devices | awk '{print $2}')
 
       if [ -z "$MAINIP" ]; then
           exit 0
       fi
 
-      NOS=$(grep -w "^$(hostname)" /tmp/netris-devices | awk {'print $3'})
+      NOS=$(grep -w "^$(hostname)" /etc/netris-devices | awk {'print $3'})
       HOSTNAME=$(hostname)
       echo hostname: $HOSTNAME
       AUTHKEY={{ $dot.ctlInfo.AuthKey }}
@@ -1244,7 +1264,9 @@ write_files:
         option www-server {{ $item.DefaultGateway }};
         option default-url = "http://{{ $item.DefaultGateway }}/onie-installer";
         option cumulus-provision-url "http://{{ $item.DefaultGateway }}/cumulus-ztp";
+      {{- if not (hasSuffix "_servers_mgmt" $item.Name) }}
         option routers {{ $item.DefaultGateway }};
+      {{- end }}
       {{- range $hyper := $dot.allVms }}
         {{- range $eachvm := $hyper }}
           {{- if ne $eachvm.Type "mgmt-server" }}

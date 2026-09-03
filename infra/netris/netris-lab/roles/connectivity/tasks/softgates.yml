@@ -27,26 +27,29 @@
     netris_username: "{{ netris_login }}"
     general_state: read
 
-- name: Wait for softgate VMs to be SSH-accessible
+- name: Wait for mgmt-server DHCP to be active
+  ansible.builtin.shell:
+    cmd: >-
+      sshpass -p "{{ vm_root_password | default('netris') }}"
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+      root@192.168.122.10 "systemctl is-active isc-dhcp-server"
+  register: _dhcp_status
+  until: _dhcp_status.stdout == "active"
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Wait for all softgate VMs to be SSH-accessible
   wait_for:
     host: "{{ item.mgmt_ip }}"
     port: 22
     timeout: 600
     sleep: 15
   loop: "{{ softgates }}"
-  ignore_errors: true
 
 - name: Remove stale SSH host keys for softgates
   shell: ssh-keygen -R {{ item.mgmt_ip }} 2>/dev/null || true
   loop: "{{ softgates }}"
-  changed_when: false
-
-- name: Set softgate hostnames
-  shell: |
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
-      "hostnamectl set-hostname {{ item.name }}" 2>/dev/null
-  loop: "{{ softgates }}"
-  ignore_errors: true
   changed_when: false
 
 - name: Wait for cloud-init to finish on softgates
@@ -56,50 +59,31 @@
   loop: "{{ softgates }}"
   register: _sg_cloudinit
   until: _sg_cloudinit is not failed
-  retries: 40
+  retries: 60
   delay: 15
   changed_when: false
-  ignore_errors: true
 
-- name: Check if netris agent is running on softgates
+- name: Restore lab DNS on softgates
   shell: |
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
-      "systemctl is-active netris-sg 2>/dev/null" 2>/dev/null
+      "echo 'nameserver {{ dns_server }}' > /etc/resolv.conf" 2>/dev/null
   loop: "{{ softgates }}"
-  register: sg_agent_check
   changed_when: false
-  ignore_errors: true
 
-- name: Install netris agent on softgates and disable DPDK
+- name: Wait for all softgate agents to become active
   shell: |
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 root@{{ item.item.mgmt_ip }} "
-      curl -fsSL https://get.netris.io | sh -s -- \
-        --lo {{ item.item.main_ip }} \
-        --controller 10.8.0.2 \
-        --hostname {{ item.item.name }} \
-        --auth {{ netris_auth_token }} \
-        --node-type {{ ns_fabric.softgate_node_type }}
-
-      # Installer hardcodes 'nameserver 1.1.1.1' and removes isc-dhcp-client
-      echo 'nameserver {{ dns_server }}' | tee /etc/resolv.conf
-      apt-get install -y isc-dhcp-client 2>/dev/null || true
-
-      if [ -f /opt/netris/etc/netris.conf ]; then
-        sed -i 's/^dpdk.*/dpdk                 = no/' /opt/netris/etc/netris.conf
-        systemctl restart netris-sg 2>/dev/null || true
-      fi
-    " 2>&1 | tail -5
-  loop: "{{ sg_agent_check.results }}"
-  when: item.stdout is not defined or item.stdout != "active"
-  ignore_errors: true
-
-- name: Wait for at least one softgate agent to become active
-  shell: |
+    failed=""
     for ip in {{ softgates | map(attribute='mgmt_ip') | join(' ') }}; do
       status=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} "systemctl is-active netris-sg 2>/dev/null" 2>/dev/null)
-      [ "$status" = "active" ] && echo "active:${ip}" && exit 0
+      if [ "$status" != "active" ]; then
+        failed="${failed} ${ip}"
+      fi
     done
-    exit 1
+    if [ -n "$failed" ]; then
+      echo "not ready:${failed}"
+      exit 1
+    fi
+    echo "all active"
   register: _sg_wait
   until: _sg_wait.rc == 0
   retries: 20
