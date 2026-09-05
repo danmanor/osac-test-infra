@@ -5,6 +5,8 @@ permissions:
   contents: read
 
 on:
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       instance-type:
@@ -48,8 +50,8 @@ on:
         default: ""
 
 concurrency:
-  group: e2e-bmaas-netris-full-install-${{ github.run_id }}
-  cancel-in-progress: false
+  group: e2e-bmaas-netris-full-install-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e-bmaas-netris:
@@ -64,3 +66,6 @@ jobs:
       bmf-operator-image: ${{ inputs.bmf-operator-image || '' }}
       osac-repo: ${{ inputs.osac-repo || '' }}
       osac-branch: ${{ inputs.osac-branch || '' }}
+      fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
+      fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
+      pr-number: ${{ github.event.pull_request.number }}
