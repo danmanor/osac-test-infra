@@ -127,7 +127,16 @@
   register: _sushy_start
   when: _sushy_running.rc != 0 or _sushy_config is changed
 
+- name: Check if firewalld is running
+  ansible.builtin.command: firewall-cmd --state
+  register: _firewalld_state
+  changed_when: false
+  failed_when: false
+
 - name: Allow sushy-tools traffic through firewalld on bmc-net bridge
+  when:
+    - _firewalld_state.rc == 0
+    - _firewalld_state.stdout | trim == 'running'
   block:
     - name: Add bmc-net bridge to libvirt firewalld zone
       ansible.builtin.command:

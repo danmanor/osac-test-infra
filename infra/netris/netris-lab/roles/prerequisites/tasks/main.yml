@@ -226,7 +226,9 @@
   failed_when: false
 
 - name: Configure firewalld
-  when: firewalld_state.rc == 0
+  when:
+    - firewalld_state.rc == 0
+    - firewalld_state.stdout | trim == 'running'
   block:
     - name: Configure firewalld trusted zone for lab interfaces
       ansible.posix.firewalld:
