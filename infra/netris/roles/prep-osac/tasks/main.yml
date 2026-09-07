@@ -257,34 +257,6 @@
   failed_when: false
   changed_when: _ns_create.rc == 0
 
-- name: Discover OCP VM bmc-net MAC
-  when: bare_metal_services | bool
-  ansible.builtin.shell:
-    cmd: >-
-      virsh domiflist {{ ocp_vm_name_pattern }} | grep {{ bmc_net_name }} | awk '{print $5}'
-  register: _ocp_bmc_mac
-  until: _ocp_bmc_mac.stdout | trim | length > 0
-  retries: 10
-  delay: 5
-
-- name: Discover OCP VM bmc-net IP from DHCP lease
-  when: bare_metal_services | bool
-  ansible.builtin.shell:
-    cmd: >-
-      virsh net-dhcp-leases {{ bmc_net_name }}
-      | grep "{{ _ocp_bmc_mac.stdout | trim }}"
-      | awk '{print $5}' | cut -d/ -f1
-      | tail -1
-  register: _ocp_bmc_ip
-  until: _ocp_bmc_ip.stdout | trim | length > 0
-  retries: 30
-  delay: 5
-
-- name: Set bmc_net_ocp_ip fact
-  when: bare_metal_services | bool
-  ansible.builtin.set_fact:
-    bmc_net_ocp_ip: "{{ _ocp_bmc_ip.stdout | trim }}"
-
 - name: Ensure Provisioning CR exists for Metal3 validation
   when: bare_metal_services | bool
   ansible.builtin.shell:
