@@ -1,0 +1,7 @@
+---
+- name: Destroy BMaaS resources
+  hosts: all
+  gather_facts: false
+  become: true
+  roles:
+    - destroy-bmaas

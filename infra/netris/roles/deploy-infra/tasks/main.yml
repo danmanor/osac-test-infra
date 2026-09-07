@@ -1,0 +1,140 @@
+---
+- name: Load netris-lab variables
+  ansible.builtin.include_vars:
+    file: "{{ netris_lab_dir }}/group_vars/all.yml"
+
+- name: Pre-flight checks
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: Ensure br-mgmt bridge exists
+  ansible.builtin.shell: |
+    ip link show {{ mgmt_bridge_name }} 2>/dev/null || {
+      ip link add name {{ mgmt_bridge_name }} type bridge
+      ip addr add {{ mgmt_bridge_cidr }} dev {{ mgmt_bridge_name }}
+    }
+    ip link set dev {{ mgmt_bridge_name }} up
+  changed_when: false
+
+- name: Ensure br-public bridge exists
+  ansible.builtin.shell: |
+    ip link show {{ public_bridge_name }} 2>/dev/null || {
+      ip link add name {{ public_bridge_name }} type bridge
+    }
+    ip link set dev {{ public_bridge_name }} up
+  changed_when: false
+
+# Only needed in isolated connectivity mode
+- name: Disable reverse path filtering on br-public
+  when: connectivity_mode == "isolated"
+  ansible.posix.sysctl:
+    name: "net.ipv4.conf.{{ public_bridge_name }}.rp_filter"
+    value: "0"
+    sysctl_set: true
+
+- name: Disable STP on virbr0 (physical NICs in VEPA mode cause STP port blocking)
+  ansible.builtin.command: ip link set dev virbr0 type bridge stp_state 0
+  changed_when: true
+
+- name: Flush restrictive libvirt nftables chains
+  ansible.builtin.shell: |
+    nft flush chain ip filter LIBVIRT_FWI 2>/dev/null || true
+    nft flush chain ip filter LIBVIRT_FWO 2>/dev/null || true
+    nft flush chain ip filter LIBVIRT_FWX 2>/dev/null || true
+    nft flush chain ip filter LIBVIRT_INP 2>/dev/null || true
+    if nft list chain ip libvirt_network guest_input &>/dev/null; then
+      nft flush chain ip libvirt_network guest_input
+      nft flush chain ip libvirt_network guest_output
+      nft add rule ip libvirt_network guest_input accept
+      nft add rule ip libvirt_network guest_output accept
+    fi
+  changed_when: false
+
+- name: Masquerade VM bridge traffic for internet access (isolated mode)
+  when: connectivity_mode == "isolated"
+  ansible.builtin.iptables:
+    table: nat
+    chain: POSTROUTING
+    source: "{{ item }}"
+    out_interface: "{{ ansible_default_ipv4.interface }}"
+    jump: MASQUERADE
+    state: present
+  loop:
+    - "{{ bgp_link_subnet }}"
+    - "{{ ns_fabric.mgmt_subnet }}"
+    - "{{ nat_cidr }}"
+    - "{{ l4lb_cidr }}"
+    - "{{ osac_external_ip_pool_cidr }}"
+    - "{{ bmaas_provisioning_snat_cidr }}"
+
+# k3s_controller's vendored "Verify controller API" task hits the same
+# OpenSSL CA-cert-loading bug documented in playbooks/deploy-infra.yml's own
+# comment; the play-level module_defaults' ca_path fix (cafile-based
+# loading) doesn't help here since this box's openssl-libs build breaks
+# even file-based cert parsing (matches upstream OpenSSL regression
+# https://github.com/openssl/openssl/issues/31807). validate_certs: false
+# avoids eager cert-parsing entirely (defers to Python's lazy default cert
+# lookup, never touches cert bytes). Scoped at the block level rather than
+# play-wide since a block-level module_defaults entry for a module fully
+# replaces (not merges with) an outer scope's entry for that same module.
+#
+# Not a real security weakening: the role's only uri call targets
+# "http://localhost:{{ controller_nodeport }}/api/auth" -- plain HTTP, so no
+# TLS handshake or certificate validation happens regardless of this setting.
+# validate_certs workaround scope — see comment above for details
+- name: Deploy K3s and Netris controller
+  module_defaults:
+    ansible.builtin.uri:
+      validate_certs: false
+  block:
+    - name: Deploy K3s and Netris controller
+      ansible.builtin.include_role:
+        name: k3s_controller
+
+- name: Check if firewalld is running
+  ansible.builtin.command: firewall-cmd --state
+  register: _firewalld_state
+  changed_when: false
+  failed_when: false
+
+- name: Ensure virbr0 is in firewalld trusted zone
+  ansible.posix.firewalld:
+    zone: trusted
+    interface: virbr0
+    permanent: true
+    immediate: true
+    state: enabled
+  when:
+    - _firewalld_state.rc == 0
+    - _firewalld_state.stdout | trim == 'running'
+
+- name: Deploy network topology
+  ansible.builtin.include_role:
+    name: topology
+
+- name: Deploy cloud simulation
+  ansible.builtin.include_role:
+    name: cloudsim
+
+- name: Configure connectivity
+  ansible.builtin.include_role:
+    name: connectivity
+
+- name: Route OSAC traffic via ISP server (isolated mode)
+  when: connectivity_mode == "isolated"
+  ansible.builtin.command: >-
+    ip route replace {{ item }}
+    via {{ bgp_link_subnet | ansible.utils.ipaddr('network') | ansible.utils.ipmath(2) }}
+    dev {{ public_bridge_name }}
+  loop:
+    - "{{ osac_external_ip_pool_cidr }}"
+    - "{{ bmaas_provisioning_snat_cidr }}"
+  changed_when: true
+
+- name: Verify netris-lab deployment
+  ansible.builtin.include_role:
+    name: verify
+
+- name: Set up BMC network and sushy-tools
+  when: bare_metal_services | bool
+  ansible.builtin.include_role:
+    name: setup-bmc

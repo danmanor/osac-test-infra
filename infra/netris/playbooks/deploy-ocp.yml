@@ -1,0 +1,8 @@
+---
+- name: Deploy OCP from snapshot
+  hosts: all
+  gather_facts: false
+  roles:
+    - configure-netris
+    - configure-dns
+    - restore-ocp

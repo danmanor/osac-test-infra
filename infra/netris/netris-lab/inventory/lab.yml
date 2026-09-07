@@ -1,0 +1,7 @@
+all:
+  vars:
+    dns_server: "8.8.8.8"
+  hosts:
+    lab:
+      ansible_connection: local
+      ansible_python_interpreter: /usr/bin/python3

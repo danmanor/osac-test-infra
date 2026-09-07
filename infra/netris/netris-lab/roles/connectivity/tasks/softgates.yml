@@ -1,0 +1,97 @@
+---
+- name: Build softgate list
+  set_fact:
+    softgates: >-
+      {%- set result = [] -%}
+      {%- for i in range(ns_fabric.softgate_count) -%}
+        {%- set _ = result.append({
+          'name': 'ns-softgate-' ~ i,
+          'mgmt_ip': '10.3.3.' ~ (i + 1),
+          'main_ip': '10.2.3.' ~ (i + 1)
+        }) -%}
+      {%- endfor -%}
+      {{ result }}
+
+- name: Get traefik NodePort
+  shell: kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: traefik_np
+  changed_when: false
+
+- name: Get auth token via collection
+  ansible.builtin.include_role:
+    name: netris.controller.general
+  vars:
+    netris_controller_url: "http://localhost:{{ traefik_np.stdout }}"
+    netris_username: "{{ netris_login }}"
+    general_state: read
+
+- name: Wait for mgmt-server DHCP to be active
+  ansible.builtin.shell:
+    cmd: >-
+      sshpass -p "{{ vm_root_password | default('netris') }}"
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+      root@192.168.122.10 "systemctl is-active isc-dhcp-server"
+  register: _dhcp_status
+  until: _dhcp_status.stdout == "active"
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Wait for all softgate VMs to be SSH-accessible
+  wait_for:
+    host: "{{ item.mgmt_ip }}"
+    port: 22
+    timeout: 600
+    sleep: 15
+  loop: "{{ softgates }}"
+
+- name: Remove stale SSH host keys for softgates
+  shell: ssh-keygen -R {{ item.mgmt_ip }} 2>/dev/null || true
+  loop: "{{ softgates }}"
+  changed_when: false
+
+- name: Wait for cloud-init to finish on softgates
+  shell: |
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
+      "cloud-init status 2>/dev/null | grep -qE 'done|error'" 2>/dev/null
+  loop: "{{ softgates }}"
+  register: _sg_cloudinit
+  until: _sg_cloudinit is not failed
+  retries: 60
+  delay: 15
+  changed_when: false
+
+- name: Restore lab DNS on softgates
+  shell: |
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} \
+      "echo 'nameserver {{ dns_server }}' > /etc/resolv.conf" 2>/dev/null
+  loop: "{{ softgates }}"
+  changed_when: false
+
+- name: Wait for all softgate agents to become active
+  shell: |
+    failed=""
+    for ip in {{ softgates | map(attribute='mgmt_ip') | join(' ') }}; do
+      status=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} "systemctl is-active netris-sg 2>/dev/null" 2>/dev/null)
+      if [ "$status" != "active" ]; then
+        failed="${failed} ${ip}"
+      fi
+    done
+    if [ -n "$failed" ]; then
+      echo "not ready:${failed}"
+      exit 1
+    fi
+    echo "all active"
+  register: _sg_wait
+  until: _sg_wait.rc == 0
+  retries: 20
+  delay: 15
+  changed_when: false
+
+- name: Wait for E-BGP sessions to establish
+  ansible.builtin.include_tasks: ebgp_wait.yml
+  vars:
+    netris_controller_url: "http://localhost:{{ traefik_np.stdout }}"
+    netris_username: "{{ netris_login }}"

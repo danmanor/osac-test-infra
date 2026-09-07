@@ -1,0 +1,279 @@
+#!/bin/bash
+
+# Podman Setup for GitHub Actions Runners (OSAC)
+#
+# Configures a runner machine to use podman for container jobs.
+# Run once per machine, safe to re-run (idempotent).
+#
+# Usage: sudo bash setup-runner-podman.sh
+
+set -euo pipefail
+
+RESET="\e[0m"
+BOLD="\e[1m"
+GREEN="\e[32m"
+RED="\e[31m"
+YELLOW="\e[33m"
+
+info()    { echo -e "${GREEN}[INFO]${RESET} $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${RESET} $*"; }
+err()     { echo -e "${RED}[ERROR]${RESET} $*"; }
+heading() { echo ""; echo -e "${GREEN}${BOLD}=== $* ===${RESET}"; echo ""; }
+
+if [ "$EUID" -ne 0 ]; then
+    err "This script must be run as root (use sudo)"
+    exit 1
+fi
+
+heading "GitHub Actions Runner - Podman Setup (OSAC)"
+
+# Step 1: Check for Docker
+heading "Step 1: Checking for Docker"
+
+DOCKER_PACKAGES=("docker" "docker-ce" "docker-ce-cli" "docker-engine" "docker.io" "containerd" "containerd.io")
+FOUND_DOCKER=0
+
+for pkg in "${DOCKER_PACKAGES[@]}"; do
+    if rpm -q "$pkg" &>/dev/null; then
+        warn "Found Docker package: $pkg"
+        FOUND_DOCKER=1
+    fi
+done
+
+if [ $FOUND_DOCKER -eq 1 ]; then
+    warn "Docker packages found"
+    read -p "Remove Docker and use podman only? (yes/NO) " -r
+    echo
+    if [[ $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
+        info "Removing Docker..."
+        systemctl stop docker.socket docker.service 2>/dev/null || true
+        systemctl disable docker.socket docker.service 2>/dev/null || true
+        dnf remove -y docker* containerd* 2>/dev/null || true
+        [ -d /var/lib/docker ] && rm -rf /var/lib/docker
+        info "Docker removed"
+    else
+        info "Keeping Docker (you'll have both Docker and podman)"
+    fi
+else
+    info "No Docker packages found"
+fi
+
+# Step 2: Install podman
+heading "Step 2: Installing Podman"
+
+info "Installing podman and podman-docker..."
+dnf install -y podman podman-docker
+podman --version
+
+# Step 3: Configure system podman socket
+heading "Step 3: Configuring System Podman Socket"
+
+info "Enabling podman.socket..."
+systemctl enable --now podman.socket
+sleep 2
+
+if [ -S "/run/podman/podman.sock" ]; then
+    info "Podman socket created"
+else
+    err "Failed to create podman socket"
+    exit 1
+fi
+
+# Step 4: Configure socket permissions
+heading "Step 4: Configuring Socket Permissions"
+
+info "Creating systemd override for socket permissions..."
+mkdir -p /etc/systemd/system/podman.socket.d
+
+cat > /etc/systemd/system/podman.socket.d/override.conf <<'EOF'
+[Socket]
+# Make socket world-accessible for GitHub Actions
+SocketMode=0666
+EOF
+
+info "Setting directory permissions..."
+chmod 755 /run/podman
+
+# Persist directory permissions across reboots.
+# Without this, systemd recreates /run/podman with 0700 (root-only).
+echo 'd /run/podman 0755 root root -' > /etc/tmpfiles.d/podman-socket.conf
+
+info "Restarting podman.socket with new permissions..."
+systemctl daemon-reload
+systemctl restart podman.socket
+sleep 2
+
+chmod 666 /run/podman/podman.sock
+ls -la /run/podman/podman.sock
+
+# Step 5: Create /var/run/docker.sock symlink
+heading "Step 5: Creating Docker Socket Symlink"
+
+# Remove old docker.sock if it exists and is not a symlink
+if [ -e "/var/run/docker.sock" ] && [ ! -L "/var/run/docker.sock" ]; then
+    warn "Removing old /var/run/docker.sock"
+    rm -f /var/run/docker.sock
+fi
+
+# Remove symlink if it points to wrong location
+if [ -L "/var/run/docker.sock" ]; then
+    CURRENT_TARGET=$(readlink -f /var/run/docker.sock 2>/dev/null || echo "")
+    if [ "$CURRENT_TARGET" != "/run/podman/podman.sock" ]; then
+        warn "Removing incorrect symlink"
+        rm -f /var/run/docker.sock
+    fi
+fi
+
+if [ ! -e "/var/run/docker.sock" ]; then
+    info "Creating symlink: /var/run/docker.sock -> /run/podman/podman.sock"
+    ln -s /run/podman/podman.sock /var/run/docker.sock
+    info "Symlink created"
+else
+    info "Symlink already exists"
+fi
+
+ls -la /var/run/docker.sock
+
+# Step 6: Test podman
+heading "Step 6: Testing Podman"
+
+info "Testing podman via docker socket..."
+if podman --remote --url unix:///var/run/docker.sock ps >/dev/null 2>&1; then
+    info "Podman works via /var/run/docker.sock"
+else
+    err "Podman test failed"
+    exit 1
+fi
+
+info "Testing docker command (uses podman)..."
+docker ps >/dev/null 2>&1 || true
+info "Docker command works (via podman)"
+
+# Step 7: Configure runner services (if any exist)
+heading "Step 7: Configuring Runner Services"
+
+RUNNER_SERVICES=$(systemctl list-units --type=service --all 'actions.runner.*' --no-legend 2>/dev/null | awk '{print $1}' || echo "")
+
+if [ -n "$RUNNER_SERVICES" ]; then
+    info "Found runner services:"
+    echo "$RUNNER_SERVICES" | sed 's/^/  - /'
+    echo ""
+
+    for service in $RUNNER_SERVICES; do
+        info "Configuring $service..."
+
+        OVERRIDE_DIR="/etc/systemd/system/${service}.d"
+        mkdir -p "$OVERRIDE_DIR"
+
+        cat > "${OVERRIDE_DIR}/podman-environment.conf" <<'EOF'
+[Service]
+# Use system podman socket via /var/run/docker.sock
+Environment="DOCKER_HOST=unix:///var/run/docker.sock"
+EOF
+
+        # Isolate each runner instance's rootless podman storage. Multiple
+        # runner instances on this host all run as the same Linux user
+        # (github-runner), so by default they share ONE podman storage
+        # graphroot -- e.g. every "podman build" invocation in every e2e
+        # workflow, across every concurrently-running runner instance,
+        # writes to the exact same ~/.local/share/containers/storage.
+        # containers/storage was never designed to be safely shared across
+        # concurrent, uncoordinated build processes (see
+        # https://github.com/containers/buildah/issues/5805 and Red Hat KB
+        # solution 6375131) -- confirmed live on this fleet: intermittent
+        # "no such file or directory" COPY failures during concurrent e2e
+        # component-image builds, traced to this exact shared-storage race,
+        # not a workflow logic bug (the affected COPY source files
+        # genuinely exist in the correct build context; the race is in
+        # buildah/containers-storage's shared layer bookkeeping).
+        RUNNER_DIR=$(systemctl show "${service}" --property=WorkingDirectory --value 2>/dev/null)
+        if [ -n "${RUNNER_DIR}" ]; then
+            STORAGE_CONF="${RUNNER_DIR}/podman-storage.conf"
+            cat > "${STORAGE_CONF}" <<EOF
+[storage]
+driver = "overlay"
+graphroot = "${RUNNER_DIR}/podman-storage"
+runroot = "/run/user/$(id -u github-runner)/containers-$(basename "${RUNNER_DIR}")"
+EOF
+            chown github-runner:github-runner "${STORAGE_CONF}"
+
+            cat > "${OVERRIDE_DIR}/podman-storage-isolation.conf" <<EOF
+[Service]
+Environment="CONTAINERS_STORAGE_CONF=${STORAGE_CONF}"
+EOF
+
+            # Pre-warm the new graphroot/runroot now, as github-runner, so
+            # the DB and directory tree already exist before this runner's
+            # first real job ever touches them. Skipping this left a real
+            # window open: a runner's first build after picking up this
+            # config failed live with "RunRoot is pointing to a path
+            # (/run/containers/storage) which is not writable" -- podman
+            # fell back to the rootful default path instead of honoring
+            # this file, on first-ever use of a brand new storage location.
+            # Manually running `podman info` under the same env correctly
+            # initialized it and a subsequent run succeeded, so pre-warming
+            # here (before any job can race the first initialization)
+            # closes the gap without needing to fully root-cause podman's
+            # internal fallback trigger.
+            #
+            # `su -` (a real login shell, going through PAM/pam_systemd),
+            # not `runuser -u` -- confirmed live that runuser fails outright
+            # with "error opening namespace handles: Permission denied"
+            # here, since it doesn't establish the session/cgroup context
+            # rootless podman needs; `su -` does, matching how an actual
+            # SSH login to this user already works.
+            su - github-runner -c "env CONTAINERS_STORAGE_CONF='${STORAGE_CONF}' podman info" >/dev/null 2>&1 || \
+                warn "  Failed to pre-warm podman storage for ${service} -- its first real job may hit the same race"
+
+            info "  Isolated podman storage: ${RUNNER_DIR}/podman-storage"
+        else
+            warn "  Could not determine WorkingDirectory for ${service} -- skipping storage isolation"
+        fi
+
+        info "  Configured $service"
+    done
+
+    info "Reloading systemd..."
+    systemctl daemon-reload
+
+    info "Restarting runners (skipping any currently running a job)..."
+    for service in $RUNNER_SERVICES; do
+        RUNNER_DIR=$(systemctl show "${service}" --property=WorkingDirectory --value 2>/dev/null)
+        if [ -n "${RUNNER_DIR}" ] && pgrep -f "${RUNNER_DIR}/bin[^ ]*/Runner\.Worker" >/dev/null 2>&1; then
+            warn "  ${service} is currently running a job -- skipping restart, its new"
+            warn "    storage config takes effect on its next natural restart. Re-run"
+            warn "    this script later (or restart it manually once idle) to apply now."
+            continue
+        fi
+        systemctl restart "$service"
+    done
+    sleep 3
+
+    for service in $RUNNER_SERVICES; do
+        if systemctl is-active --quiet "$service"; then
+            info "  $service is active"
+        else
+            err "  $service is NOT active"
+        fi
+    done
+else
+    info "No runner services found yet"
+    info "Run this script again after installing runners"
+fi
+
+# Step 8: Final verification
+heading "Step 8: Final Verification"
+
+info "Podman: $(podman --version)"
+info "Docker: $(docker --version 2>/dev/null || echo 'n/a')"
+echo ""
+info "Socket status:"
+ls -la /run/podman/podman.sock
+ls -la /var/run/docker.sock
+
+heading "Setup Complete!"
+
+echo "Next steps:"
+echo "  1. Install runners: ./action-runners-setup.sh <TOKEN> [NUM_RUNNERS]"
+echo "  2. After installing, re-run this script to configure podman for runners"
+echo "  3. All 'docker' commands now use podman transparently"

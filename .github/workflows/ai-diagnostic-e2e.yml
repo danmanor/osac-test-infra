@@ -1,0 +1,807 @@
+---
+# Every real PR here is fork-originated, and GitHub Actions gives a
+# pull_request-triggered job from a fork a read-only token with no OIDC
+# minting at all -- unconditionally, by policy. So an AI diagnosis step can
+# never live inside the job that runs the fork's own test code. This
+# workflow_run listener runs default-branch YAML with a write token in this
+# repo's own context regardless of what triggered the original run, which is
+# the safe place to authenticate to Vertex AI and read the (already
+# gitleaks-scanned/redacted) log artifact the failed run already produced --
+# no fork code is ever checked out or executed here.
+#
+# workflow_run only fires for runs that happened in the repo that OWNS the
+# listener file, so every repo with E2E workflows to react to still needs
+# its own trigger -- but the actual logic (all three jobs below) lives here
+# exactly once and is invoked cross-repo via workflow_call, rather than
+# duplicated script-for-script. osac's own copy is a ~15-line wrapper:
+# `on: workflow_run: {...}` + `uses: osac-project/osac-test-infra/.github/
+# workflows/ai-diagnostic-e2e.yml@main`. github.event/github.repository
+# inside a workflow_call-invoked reusable workflow reflect the CALLER's own
+# triggering event, exactly as for the e2e-*-full-install.yml reusable
+# workflows already called cross-repo the same way -- so every step below
+# already correctly resolves against whichever repo's E2E run actually
+# failed without needing any inputs for that. The one input this file does
+# take (gemini-model) is unrelated to that -- see the workflow_call block
+# below -- and defaults identically whether invoked via workflow_call or
+# natively via workflow_run, since `inputs` is only populated for the
+# former. The "Checkout repository" steps
+# still explicitly pin `repository: osac-project/osac-test-infra` (rather
+# than defaulting to github.repository) so the script/action files
+# themselves are always read from here, never duplicated into a caller.
+name: AI diagnostic (E2E fork PR failures)
+
+on:
+  workflow_run:  # zizmor: ignore[dangerous-triggers] -- no PR-head checkout; only trusted SHA-pinned/local composite actions; untrusted event data via env:, never interpolated into run: bodies.
+    workflows:
+      - E2E CaaS Full Install
+      - E2E BMaaS Full Install
+      - E2E VMaaS Full Install
+    types: [completed]
+  workflow_call:
+    inputs:
+      gemini-model:
+        description: >-
+          Vertex AI Gemini model id to diagnose with, e.g. gemini-2.5-pro or
+          gemini-2.5-flash. Must be a key in ai-diagnose-failure.py's
+          GEMINI_PRICING_USD_PER_MILLION or the cost estimate in the
+          diagnosis footer degrades to "unavailable" rather than silently
+          costing against the wrong model's rate. Optional -- defaults to
+          gemini-2.5-pro (also this file's own default when triggered
+          natively via workflow_run, which never populates `inputs`).
+        type: string
+        required: false
+        default: gemini-2.5-pro
+    secrets:
+      # Credentials for the "OSAC AI" GitHub App (bot identity
+      # osac-ai[bot], installed on both osac and osac-test-infra),
+      # exchanged for a short-lived installation token per job by "Mint
+      # OSAC AI bot token" below -- see mint-github-app-token's own
+      # description for why this doesn't fetch from Vault the way
+      # self-hosted-runner workflows do (this job runs on ubuntu-latest).
+      # Declared explicitly (rather than relying on a caller's `secrets:
+      # inherit`) so the interface is self-documenting and doesn't depend
+      # on inherit's less-clearly-documented cross-repo behavior.
+      OSAC_AI_APP_ID:
+        description: The OSAC AI GitHub App's numeric ID.
+        required: true
+      OSAC_AI_APP_PRIVATE_KEY:
+        description: The OSAC AI GitHub App's PEM private key.
+        required: true
+
+concurrency:
+  # Keyed by the PR's fork repo + branch, NOT workflow_run.id or head_sha:
+  # the shared resource being protected (the sticky PR comment) is keyed by
+  # PR number, and neither of those is actually PR-stable. workflow_run.id
+  # differs across CaaS/BMaaS/VMaaS even for the same push. head_sha
+  # differs across separate pushes to the SAME PR -- so if a user pushes a
+  # fixup while an earlier push's suites are still running, that push's
+  # listener runs would land in a *different* head_sha group and race the
+  # earlier one's "Upsert PR comment" step on the same underlying comment,
+  # exactly the bug this key exists to prevent, just via a different
+  # trigger. head_repository+head_branch is stable across pushes to one PR
+  # while still differing across PRs (concurrency.group can only use the
+  # github/inputs/vars contexts, evaluated before any job runs -- the real
+  # PR number isn't known until the "resolve" job's own API lookup, so it
+  # can't be used here).
+  group: ai-diagnostic-e2e-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+  # Without this, GitHub's default queue depth is 1: when a THIRD trigger
+  # arrives while one run is in-progress and a second is already pending,
+  # the second (still-pending) run gets silently CANCELLED and replaced by
+  # the third, rather than queuing behind it -- confirmed live (run
+  # 33940378100, PR #494: zero jobs ever started) when CaaS/BMaaS/VMaaS
+  # all failed within seconds of the same push, and cost the sticky
+  # comment an entire section. queue: max raises that to 100 pending runs
+  # in FIFO order, which is what "one comment per PR, safe under N
+  # simultaneous suite failures" actually requires. (Not compatible with
+  # cancel-in-progress: true, which is exactly why this is false above.)
+  queue: max
+
+# Deny-by-default at the workflow level; each job below sets its own
+# least-privilege block regardless.
+permissions: {}
+
+jobs:
+  # Split into 3 jobs (rather than one job with failure/success branches
+  # inside it) so a passing run's GITHUB_TOKEN never carries actions:read or
+  # id-token:write -- permissions only the failure path's artifact
+  # download/Vertex auth actually need. GitHub Actions permissions: are
+  # granted for a job's whole duration regardless of which steps end up
+  # running, so a single shared job would otherwise over-grant the success
+  # path just because the failure path sits in the same job.
+  resolve:
+    name: Resolve PR
+    # schedule/workflow_dispatch runs against main already get a same-job
+    # diagnosis in the Job Summary (Phase 1); this is specifically the path
+    # for genuine fork PRs, which never reach that code (no OIDC there at
+    # all). merge_group IS included (a real merge-queue E2E failure, e.g.
+    # run 33666352565 on PR #257, otherwise got zero diagnosis) -- see the
+    # "Resolve fork PR from head SHA" step below for how its PR number is
+    # resolved differently than a plain pull_request run's.
+    if: >-
+      (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'success') &&
+      (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'merge_group')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read  # list open PRs to resolve head SHA -> PR number
+    outputs:
+      found: ${{ steps.pr.outputs.found }}
+      number: ${{ steps.pr.outputs.number }}
+      has-test-evidence: ${{ steps.evidence.outputs.has-test-evidence }}
+    steps:
+      - name: Resolve fork PR from head SHA
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_NAME: ${{ github.event.workflow_run.event }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+
+          # merge_group's head_sha is a synthetic merge-queue commit, never
+          # the PR's own head.sha -- the head.sha-matching path below would
+          # never find a match for it regardless of how long we search.
+          # GitHub's merge queue instead encodes the PR number directly in
+          # the temporary branch name it creates (documented format:
+          # gh-readonly-queue/<base>/pr-<number>-<sha>), so parse that
+          # instead. Confirmed live against run 33666352565 on PR #257.
+          if [[ "${EVENT_NAME}" == "merge_group" ]]; then
+            if [[ "${HEAD_BRANCH}" =~ ^gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
+              pr_number="${BASH_REMATCH[1]}"
+              # This repo's merge queue can batch multiple PRs into one
+              # build (grouping_strategy: ALLGREEN, max_entries_to_build: 4
+              # per the ci-status-checks ruleset) -- the branch name only
+              # ever reflects ONE of them, so a batched failure could
+              # actually be caused by a different PR in the same group.
+              # merge_method is SQUASH, and each squashed PR's own
+              # "(#N)" trailer survives into the final commit message, so
+              # count distinct trailers as a proxy for how many PRs this
+              # build actually covers, and skip (rather than guess) if
+              # it's more than the one this branch name names.
+              commit_message=$(gh api "repos/${REPO}/commits/${HEAD_SHA}" --jq '.commit.message' 2>/dev/null || echo "")
+              pr_ref_count=$(grep -oE '\(#[0-9]+\)' <<<"${commit_message}" | sort -u | wc -l)
+              if [[ "${pr_ref_count}" -gt 1 ]]; then
+                echo "Merge group at ${HEAD_SHA:0:7} batches ${pr_ref_count} PRs (multiple '(#N)' trailers in the commit message); skipping rather than attributing this failure to a single PR."
+                echo "found=false" >> "${GITHUB_OUTPUT}"
+                exit 0
+              fi
+              # Confirm still open -- a merge_group run can finish after its
+              # PR was already merged/closed (e.g. superseded by a later
+              # queue entry), and posting to a closed PR's thread is
+              # confusing, not useful.
+              if pr_state=$(gh api "repos/${REPO}/pulls/${pr_number}" --jq '.state' 2>/dev/null) && [[ "${pr_state}" == "open" ]]; then
+                echo "found=true" >> "${GITHUB_OUTPUT}"
+                echo "number=${pr_number}" >> "${GITHUB_OUTPUT}"
+              else
+                echo "Parsed PR #${pr_number} from merge_group branch '${HEAD_BRANCH}' but it's not open (state: ${pr_state:-unknown}); skipping."
+                echo "found=false" >> "${GITHUB_OUTPUT}"
+              fi
+            else
+              echo "merge_group head_branch '${HEAD_BRANCH}' doesn't match the expected gh-readonly-queue/.../pr-N-... pattern; skipping."
+              echo "found=false" >> "${GITHUB_OUTPUT}"
+            fi
+            exit 0
+          fi
+
+          # commits/{sha}/pulls is empty for unmerged fork SHAs (same gap
+          # e2e-on-approval-fork.yml works around). List open PRs targeting
+          # main and match head.sha; require a unique match rather than
+          # trusting github.event.workflow_run.pull_requests[], which is
+          # unreliable/empty for genuine cross-fork PRs.
+          if ! prs_json=$(gh api --paginate \
+            "repos/${REPO}/pulls?state=open&base=main&per_page=100" \
+            --jq '.[]' | jq -s '.'); then
+            echo "Failed to list open PRs for ${HEAD_SHA:0:7}; skipping."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          pr_json=$(jq -c --arg sha "${HEAD_SHA}" '
+            [.[] | select(.state == "open") | select(.head.sha == $sha)]
+            | if length == 1 then .[0] else empty end
+          ' <<<"${prs_json}")
+          if [[ -z "${pr_json}" || "${pr_json}" == "null" ]]; then
+            echo "No unique open PR at ${HEAD_SHA:0:7}; skipping (stale head, or not a PR run)."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "found=true" >> "${GITHUB_OUTPUT}"
+          echo "number=$(jq -r '.number' <<<"${pr_json}")" >> "${GITHUB_OUTPUT}"
+
+      # OSAC-3370's cheap e2e-readiness gate (lgtm / `/e2e-ready` /
+      # CodeRabbit approval) can fail the whole caller workflow before the
+      # actual e2e-{suite}-full-install job -- the one that boots a cluster
+      # and produces the osac-logs-* artifact this diagnosis is built from
+      # -- ever runs. Diagnosing that case burns a Vertex AI call against a
+      # run with zero test evidence and produces a "no artifacts found, go
+      # check the logs yourself" non-answer instead of a real diagnosis; the
+      # actual root cause (missing e2e-ready label/approval) is a fixed,
+      # well-known one-liner already visible in the failing e2e-readiness
+      # check itself, not something worth asking an LLM about.
+      #
+      # Also gates the SUCCESS path (comment-success below): the paths-filter
+      # `changes` job can decide `should-run: false` for a doc-only PR,
+      # which skips e2e-*-full-install the same way while the caller
+      # workflow's overall conclusion is still 'success' -- without this
+      # check, a later doc-only push would flip a PR's sticky comment to
+      # "✅ Passing" for a suite that never actually re-ran, not one that
+      # actually passed. No `if:` here (unlike the rest of this job's
+      # steps) so it runs for both conclusions; resolve's own job-level
+      # `if:` above already restricts this to success/failure PR runs.
+      - name: Check whether the E2E test job actually ran
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          # Once the job actually runs (not skipped), GitHub composites its
+          # name as "e2e-bmaas-full-install / e2e" -- match that too, or a
+          # $-anchored plain-name-only pattern misreports every real run as
+          # "missing" evidence (see PR #458, run 33653594254).
+          full_install_conclusion=$(gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name | test("^e2e-[a-z]+-full-install(\\s*/.*)?$")) | .conclusion' | head -1)
+          if [[ -z "${full_install_conclusion}" || "${full_install_conclusion}" == "skipped" ]]; then
+            echo "e2e-*-full-install job conclusion: '${full_install_conclusion:-missing}' -- the actual E2E test never ran (likely blocked by the e2e-readiness gate). Skipping AI diagnosis, no test evidence to analyze."
+            echo "has-test-evidence=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has-test-evidence=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+  # Explicit name so the job's auto-generated Job Summary section header
+  # reads "Diagnose summary" instead of the raw job id ("diagnose
+  # summary") -- GitHub appends the literal, lowercase word "summary"
+  # itself; that part isn't controllable from here.
+  diagnose:
+    name: Diagnose
+    needs: resolve
+    if: >-
+      needs.resolve.outputs.found == 'true' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      needs.resolve.outputs.has-test-evidence == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read       # checkout this repo's own default-branch composite action + script only
+      actions: read        # list/download the failed run's artifacts
+      pull-requests: read  # fetch this PR's changed-files/diff for extra prompt context
+      id-token: write      # Vertex AI WIF auth
+      # No issues:write / statuses:write here: posting the comment and
+      # commit status both go through a minted OSAC AI GitHub App
+      # installation token, not GITHUB_TOKEN -- see "Mint OSAC AI bot
+      # token" and the comment/status steps below for why.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # Pinned explicitly (not github.repository's default) so this
+          # always checks out the scripts/action here, regardless of
+          # whether this run is native (workflow_run) or invoked
+          # cross-repo via workflow_call from another repo's wrapper.
+          repository: osac-project/osac-test-infra
+          persist-credentials: false
+
+      # Scoped to Issues (known-issues fetch, PR comments, recurring-
+      # failure tracking) + Commit statuses on both osac and
+      # osac-test-infra, plus read-only Pull requests (checking a PR is
+      # still open before editing its comment) -- the OSAC AI app is
+      # installed on both repos so one token covers whichever repo's E2E
+      # run actually failed, and osac-test-infra specifically for the
+      # known-issues/recurring-failure Issues regardless of which repo
+      # that is. Replaces the old osac-ai-diagnostic-bot fine-grained PAT
+      # (AI_DIAGNOSTIC_TOKEN) -- a GitHub App's installation token is
+      # short-lived (1h, minted fresh per job) and needs no seat/2FA'd
+      # bot-user account to maintain or rotate.
+      - name: Mint OSAC AI bot token
+        id: mint-ai-token
+        uses: ./.github/actions/mint-github-app-token
+        with:
+          app-id: ${{ secrets.OSAC_AI_APP_ID }}
+          private-key: ${{ secrets.OSAC_AI_APP_PRIVATE_KEY }}
+          account-login: osac-project
+          repositories: osac,osac-test-infra
+          # pull_requests bumped from read to write: posting a NEW PR
+          # comment (POST .../issues/{pr}/comments) 403'd with "Resource
+          # not accessible by integration" under issues:write + pull_
+          # requests:read alone, confirmed live (run 33939347107) even
+          # though the App's own Issues permission is Read and write and
+          # the same token's statuses:write call succeeded in the same
+          # run -- see mint-github-app-token's new debug line for the
+          # actual granted-permissions object next time this needs
+          # re-diagnosing.
+          permissions: '{"issues":"write","pull_requests":"write","statuses":"write"}'
+
+      - name: Fetch PR changed-files and diff
+        id: pr-context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.number }}
+        run: |
+          set -euo pipefail
+          # Changed-file list for extra prompt context. Emitted as a single
+          # compact JSON line (jq -c), not a newline-delimited block -- PR
+          # file paths are attacker-controlled (fork PR author's own
+          # filenames), so a heredoc-style multiline GITHUB_OUTPUT here
+          # would risk delimiter-collision output injection. Capped at 40
+          # so a huge PR can't blow up the prompt.
+          files_json=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100" --jq '.[].filename' 2>/dev/null \
+            | jq -Rsc '[splits("\n")] | map(select(length > 0)) | .[:40]')
+          echo "files=${files_json:-[]}" >> "${GITHUB_OUTPUT}"
+
+          # Bounded PR diff for extra prompt context. Same JSON-single-line
+          # encoding as the filenames above, and for the same reason (the
+          # diff's actual content is even more fully attacker-authored than
+          # a filename, so no custom delimiter). Truncated in raw text
+          # BEFORE JSON-encoding to keep the prompt size predictable
+          # regardless of PR size -- the model only ever uses this as
+          # inert diagnostic context (never executed, and the eventual
+          # commit status/comment are both built with jq, never shell-
+          # interpolated), so a crafted/adversarial diff can produce a
+          # weird diagnosis at worst, not a security issue.
+          MAX_DIFF_CHARS=8000
+          raw_diff=$(gh api -H "Accept: application/vnd.github.v3.diff" "repos/${REPO}/pulls/${PR_NUMBER}" 2>/dev/null || true)
+          diff_text="${raw_diff:0:${MAX_DIFF_CHARS}}"
+          if [[ "${#raw_diff}" -gt "${MAX_DIFF_CHARS}" ]]; then
+            diff_text=$(printf '%s\n... (truncated, diff exceeds %s chars)' "${diff_text}" "${MAX_DIFF_CHARS}")
+          fi
+          diff_json=$(jq -Rs . <<<"${diff_text}")
+          echo "diff=${diff_json}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download failure artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          EXTRACT_DIR="${RUNNER_TEMP}/osac-artifacts"
+          mkdir -p "${EXTRACT_DIR}"
+
+          # Same run ID as the reusable workflow's own job (workflow_call
+          # jobs share the caller's run), so this is the exact artifact
+          # gather-artifacts uploaded for this failure.
+          art_json=$(gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" --jq '.artifacts[]' | jq -s '
+            [.[] | select(.expired == false) | select(.name | startswith("osac-logs-"))]
+            | first // empty
+          ')
+          if [[ -z "${art_json}" || "${art_json}" == "null" ]]; then
+            echo "No osac-logs-* artifact found for run ${RUN_ID}; diagnosing without log/junit signal."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          art_id=$(jq -r '.id' <<<"${art_json}")
+          zip_path="${RUNNER_TEMP}/artifact-${art_id}.zip"
+          if ! gh api "repos/${REPO}/actions/artifacts/${art_id}/zip" > "${zip_path}"; then
+            echo "Failed to download artifact ${art_id}; diagnosing without log/junit signal."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          unzip -q -o "${zip_path}" -d "${EXTRACT_DIR}"
+          echo "found=true" >> "${GITHUB_OUTPUT}"
+          echo "dir=${EXTRACT_DIR}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate for AI diagnosis
+        id: vertex-auth
+        uses: ./.github/actions/vertex-ai-auth
+
+      # The known-issues memory IS this: title+body of every osac-test-infra
+      # issue labeled confirmed-known-issue (see
+      # track-recurring-failure.py's module docstring for the full
+      # promotion flow). Fetched live, not checked out as files, so
+      # promoting a candidate is just adding a label -- no PR needed. Uses
+      # the minted OSAC AI bot token (not github.token) because the corpus
+      # always lives in osac-test-infra regardless of which repo this run
+      # is actually diagnosing.
+      - name: Fetch confirmed known issues
+        id: known-issues
+        env:
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.mint-ai-token.outputs.bot-login }}
+        run: |
+          set -euo pipefail
+          MAX_CHARS=8000
+          # creator filter is defense-in-depth, not the primary guard
+          # (only write-access holders can apply this label at all, and a
+          # random public user opening an issue in this public repo can't
+          # self-label it) -- but it means even a maintainer mistakenly
+          # labeling someone else's unrelated issue can never feed it
+          # into every future diagnosis prompt.
+          #
+          # BOT_LOGIN comes from mint-github-app-token's own /app slug
+          # lookup, not `gh api user` -- that endpoint doesn't work with
+          # GitHub App installation tokens at all (no "Works with GitHub
+          # Apps" support), unlike the old fine-grained PAT this replaced,
+          # which really was a normal user account.
+          bot_login="${BOT_LOGIN}"
+          issues_json=$(gh api --paginate \
+            "repos/osac-project/osac-test-infra/issues?labels=confirmed-known-issue&creator=${bot_login}&state=open&per_page=100" \
+            --jq '.[] | {title, body}' | jq -s '.')
+          text=$(jq -r '
+            if length == 0 then "(none documented yet)"
+            else [.[] | "# \(.title)\n\n\(.body // "")"] | join("\n\n---\n\n")
+            end
+          ' <<<"${issues_json}")
+          if [[ "${#text}" -gt "${MAX_CHARS}" ]]; then
+            text=$(printf '%s\n... (truncated -- corpus has grown past the prompt budget, trim confirmed-known-issue labels)' "${text:0:${MAX_CHARS}}")
+          fi
+          # Same single-line JSON-string encoding as CHANGED_FILES/PR_DIFF
+          # above -- issue bodies are human-written (whoever confirmed
+          # them), not attacker-controlled, but this keeps encoding
+          # consistent and sidesteps delimiter issues regardless.
+          echo "text=$(jq -Rs . <<<"${text}")" >> "${GITHUB_OUTPUT}"
+
+      - name: Run AI failure diagnosis
+        id: diagnose-script
+        env:
+          ARTIFACT_DIR: ${{ steps.artifact.outputs.dir }}
+          JUNIT_PATH: ${{ steps.artifact.outputs.dir }}/junit.xml
+          GOOGLE_CLOUD_PROJECT: ${{ steps.vertex-auth.outputs.gcp-project }}
+          GOOGLE_CLOUD_LOCATION: ${{ steps.vertex-auth.outputs.gcp-location }}
+          # `inputs.gemini-model` only exists when this workflow was invoked
+          # via workflow_call (e.g. osac's wrapper) -- empty on a native
+          # workflow_run trigger in this repo, hence the fallback, which
+          # must match the workflow_call input's own `default:` above and
+          # ai-diagnose-failure.py's own GEMINI_MODEL fallback.
+          GEMINI_MODEL: ${{ inputs.gemini-model || 'gemini-2.5-pro' }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          DIAGNOSIS_FILE: ${{ runner.temp }}/diagnosis.md
+          CHANGED_FILES: ${{ steps.pr-context.outputs.files }}
+          PR_DIFF: ${{ steps.pr-context.outputs.diff }}
+          KNOWN_ISSUES: ${{ steps.known-issues.outputs.text }}
+        run: python3 .github/scripts/ai-diagnose-failure.py
+
+      # Deliberately a commit Status, not a Check Run. Check Runs are only
+      # linked into a PR's Checks-tab rollup (statusCheckRollup) via their
+      # check_suite's `pull_requests` association, and GitHub can only
+      # populate that when the PR's head branch lives in the SAME repo --
+      # for a genuine cross-fork PR (which is every real PR here) it's
+      # always empty, so a Check Run created this way is queryable via the
+      # API but silently never appears on the PR page. Verified empirically
+      # against a real fork PR before landing this. Commit statuses have no
+      # such linkage requirement -- they attach directly to the SHA and
+      # always show up in the rollup, which is how pre-Checks-API CI
+      # integrations (e.g. classic Travis CI) supported fork PRs for years.
+      #
+      # Posted via the minted OSAC AI bot token -- a GitHub App installation
+      # token scoped to Issues + Commit statuses on osac/osac-test-infra --
+      # rather than GITHUB_TOKEN, so this always shows up under a stable,
+      # recognizable bot identity (osac-ai[bot]) distinct from the generic
+      # github-actions[bot] every other job in these repos posts as.
+      #
+      # !cancelled() (rather than relying on the implicit success() this
+      # if: would otherwise AND in) so this still runs -- and posts the
+      # "diagnosis unavailable" fallback below -- even if an earlier step
+      # (artifact download, Vertex auth, diagnosis itself) hard-fails.
+      # Without it, any of those failing means the PR gets no feedback at
+      # all instead of at least an honest "unavailable" status.
+      - name: Publish diagnostic status
+        if: "!cancelled()"
+        env:
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          # This job's own run -- not the failed E2E run -- since this is
+          # the one whose Job Summary actually has the full diagnosis text
+          # (ai-diagnose-failure.py always writes it there too; commit
+          # status `description` is capped at ~140 chars and plain text).
+          LISTENER_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Read-only here -- must NOT write a fallback into the shared
+          # DIAGNOSIS_FILE itself (unlike the similarly-shaped check in
+          # "Prepare comment section" below). diagnosis.md is also read by
+          # "Prepare comment section" (which only generates its own
+          # titled "# ... AI Diagnosis | Category: ..." fallback when the
+          # file is still genuinely empty) and by "Track recurring-failure
+          # candidate" -- if this step claimed the file first, both of
+          # those would see a non-empty file and skip their own, more
+          # informative handling, silently losing the diagnosis title
+          # from the PR comment for exactly the run that most needs one
+          # (a hard failure before ai-diagnose-failure.py ever got to
+          # write it).
+          DIAGNOSIS_FILE="${RUNNER_TEMP}/diagnosis.md"
+          if [[ -s "${DIAGNOSIS_FILE}" ]]; then
+            SNIPPET=$(tr '\n' ' ' <"${DIAGNOSIS_FILE}" | cut -c1-137)
+            if [[ "$(wc -c <"${DIAGNOSIS_FILE}")" -gt 137 ]]; then
+              SNIPPET="${SNIPPET}..."
+            fi
+          else
+            SNIPPET="AI diagnosis unavailable for this run."
+          fi
+          # Built with jq (not shell interpolation) so LLM-generated diagnosis
+          # text -- untrusted output -- is never treated as anything but a
+          # JSON string value.
+          jq -n \
+            --arg description "${SNIPPET}" \
+            --arg target_url "${LISTENER_RUN_URL}" \
+            --arg context "AI diagnosis: ${WORKFLOW_NAME}" \
+            '{
+              state: "success",
+              context: $context,
+              description: $description,
+              target_url: $target_url
+            }' | gh api "repos/${REPO}/statuses/${HEAD_SHA}" --input -
+
+      # One sticky comment per PR (not a new comment per failure) -- found
+      # by a hidden marker in its body, then edited in place. One section
+      # per E2E suite within it, so CaaS/BMaaS/VMaaS failures/passes don't
+      # clobber each other. Only ever created on a genuine failure (see the
+      # comment-success job for the passing-run edit path); a passing run
+      # with no prior failure comment posts nothing at all.
+      #
+      # Posted via the minted OSAC AI bot token, same reasoning as the
+      # commit status above -- plus it's what makes the author-identity
+      # check below possible: GITHUB_TOKEN always posts as
+      # github-actions[bot], which any PR participant could also front-run
+      # by posting their own comment starting with our marker text before
+      # this job ever runs (see below).
+      - name: Find existing diagnostic comment
+        id: comment
+        if: "!cancelled()"
+        env:
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.mint-ai-token.outputs.bot-login }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.number }}
+        run: |
+          set -euo pipefail
+          # Resolved by mint-github-app-token via /app's own slug, not `gh
+          # api user` (doesn't work with installation tokens) -- see the
+          # "Fetch confirmed known issues" step above for the full
+          # reasoning. Read into a shell var (never hardcoded) so the
+          # author-match below always matches whichever account the
+          # minted OSAC AI bot token actually authenticates as.
+          bot_login="${BOT_LOGIN}"
+          BODY_FILE="${RUNNER_TEMP}/existing-comment-body.md"
+          # Fetch id+body+author together and search in jq (not `| head -1`
+          # on a live gh api pipe, which risks a SIGPIPE-under-pipefail
+          # failure if head closes the pipe before gh finishes paginating).
+          comments_json=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" --jq '.[] | {id, body, user: .user.login}' | jq -s '.')
+          # Must also check the author: any PR participant (including the
+          # fork PR's own author) can post a comment starting with our
+          # marker text before this job ever runs. Without the author
+          # check, this job would find and PATCH *their* comment --
+          # upsert_section only ever touches its own matching section, so
+          # whatever else they put in that comment body would be silently
+          # preserved and kept alive by our own bot indefinitely.
+          comment_id=$(jq -r --arg bot "${bot_login}" '
+            [.[] | select(.user == $bot) | select(.body | startswith("<!-- osac-ai-diagnostic-comment -->"))]
+            | if length > 0 then .[0].id else empty end
+          ' <<<"${comments_json}")
+          if [[ -n "${comment_id}" ]]; then
+            jq -r --arg id "${comment_id}" '.[] | select((.id|tostring) == $id) | .body' <<<"${comments_json}" > "${BODY_FILE}"
+            echo "id=${comment_id}" >> "${GITHUB_OUTPUT}"
+          else
+            : > "${BODY_FILE}"
+            echo "id=" >> "${GITHUB_OUTPUT}"
+          fi
+          echo "body-file=${BODY_FILE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare comment section
+        id: section
+        if: "!cancelled()"
+        env:
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          # Falls back to UNKNOWN if the diagnosis step itself hard-failed
+          # before setting this output (see ai-diagnose-failure.py's own
+          # main(), which always writes it on the success path).
+          CATEGORY: ${{ steps.diagnose-script.outputs.category || 'UNKNOWN' }}
+        run: |
+          set -euo pipefail
+          DIAGNOSIS_FILE="${RUNNER_TEMP}/diagnosis.md"
+          if [[ ! -s "${DIAGNOSIS_FILE}" ]]; then
+            # ai-diagnose-failure.py never ran far enough to write its own
+            # title (build_diagnosis_body), so this fallback grows its own
+            # -- same "# <emoji> WORKFLOW -- AI Diagnosis | Category: ..."
+            # shape, so a reader scanning multiple stacked sections in this
+            # sticky comment sees a consistent header either way.
+            {
+              echo "# ❌ ${WORKFLOW_NAME} -- AI Diagnosis | Category: \`${CATEGORY}\`"
+              echo
+              echo "_AI diagnosis unavailable for this run._"
+            } > "${DIAGNOSIS_FILE}"
+          fi
+          # DIAGNOSIS_FILE already contains its own title (workflow name +
+          # category badge, via ai-diagnose-failure.py's
+          # build_diagnosis_body) plus its own Full run line closing out
+          # the summary (via format_full_run_line) -- used as-is, not
+          # wrapped with a second header here, so the two don't duplicate.
+          echo "section-file=${DIAGNOSIS_FILE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build updated comment body
+        id: body
+        if: "!cancelled()"
+        env:
+          CURRENT_BODY_FILE: ${{ steps.comment.outputs.body-file }}
+          SECTION_KEY: ${{ github.event.workflow_run.name }}
+          SECTION_CONTENT_FILE: ${{ steps.section.outputs.section-file }}
+          OUTPUT_BODY_FILE: ${{ runner.temp }}/new-comment-body.md
+          # Adds to whatever running total the existing comment already
+          # carries -- see upsert-pr-comment.py's own render_total_block
+          # for why. Empty when ai-diagnose-failure.py had no usable cost
+          # data (an exception before Gemini responded, or GEMINI_MODEL
+          # missing from its pricing table); upsert-pr-comment.py treats
+          # that as "add nothing", not "add zero".
+          RUN_COST_USD: ${{ steps.diagnose-script.outputs.cost-usd }}
+          RUN_INPUT_TOKENS: ${{ steps.diagnose-script.outputs.input-tokens }}
+          RUN_OUTPUT_TOKENS: ${{ steps.diagnose-script.outputs.output-tokens }}
+        run: python3 .github/scripts/upsert-pr-comment.py
+
+      - name: Upsert PR comment
+        if: "!cancelled()"
+        env:
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.number }}
+          COMMENT_ID: ${{ steps.comment.outputs.id }}
+        run: |
+          set -euo pipefail
+          # Re-check right before mutating: resolve decided found=true
+          # potentially minutes ago (artifact download + Gemini call sit in
+          # between), and the PR could have merged/closed since. Posting or
+          # editing a diagnosis comment on an already-resolved PR is
+          # confusing noise, not useful signal.
+          pr_state=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "unknown")
+          if [[ "${pr_state}" != "open" ]]; then
+            echo "PR #${PR_NUMBER} is no longer open (state: ${pr_state}); skipping comment."
+            exit 0
+          fi
+          BODY_FILE="${RUNNER_TEMP}/new-comment-body.md"
+          if [[ -n "${COMMENT_ID}" ]]; then
+            jq -Rs '{body: .}' < "${BODY_FILE}" | gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" -X PATCH --input -
+          else
+            jq -Rs '{body: .}' < "${BODY_FILE}" | gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --input -
+          fi
+
+      # Opens/bumps a review-queue issue in osac-test-infra when the same
+      # JUnit test fails repeatedly -- never applies the confirmed-known-
+      # issue label itself; a human still decides whether to promote a
+      # flagged candidate. Uses the minted OSAC AI bot token (already
+      # scoped to Issues read/write on osac-test-infra) rather than
+      # GITHUB_TOKEN, same reasoning as the PR comment/status steps above.
+      - name: Track recurring-failure candidate
+        if: "!cancelled()"
+        env:
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.number }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          JUNIT_PATH: ${{ steps.artifact.outputs.dir }}/junit.xml
+          DIAGNOSIS_FILE: ${{ runner.temp }}/diagnosis.md
+        run: python3 .github/scripts/track-recurring-failure.py
+
+  # Separate, minimal job for the "now passing" comment edit: needs neither
+  # actions:read (no artifact to download) nor id-token:write (no diagnosis
+  # to run) -- see the top-level comment on `jobs:` for why this isn't just
+  # a branch inside the diagnose job above.
+  comment-success:
+    name: Mark Resolved
+    needs: resolve
+    if: >-
+      needs.resolve.outputs.found == 'true' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      needs.resolve.outputs.has-test-evidence == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read  # checkout for the upsert-pr-comment.py helper only
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # Pinned explicitly (not github.repository's default) so this
+          # always checks out the scripts/action here, regardless of
+          # whether this run is native (workflow_run) or invoked
+          # cross-repo via workflow_call from another repo's wrapper.
+          repository: osac-project/osac-test-infra
+          persist-credentials: false
+
+      # Narrower than the diagnose job's own copy of this step: this job
+      # only ever edits the existing sticky comment, never posts a commit
+      # status or touches Issues on osac-test-infra.
+      - name: Mint OSAC AI bot token
+        id: mint-ai-token
+        uses: ./.github/actions/mint-github-app-token
+        with:
+          app-id: ${{ secrets.OSAC_AI_APP_ID }}
+          private-key: ${{ secrets.OSAC_AI_APP_PRIVATE_KEY }}
+          account-login: osac-project
+          repositories: osac,osac-test-infra
+          # pull_requests bumped from read to write -- see the diagnose
+          # job's own copy of this step for why (PATCHing an existing
+          # comment might not hit the same restriction POSTing a new one
+          # did, but this job edits the very same kind of resource, so
+          # keeping both jobs' grants identical avoids re-discovering this
+          # the hard way here too).
+          permissions: '{"issues":"write","pull_requests":"write"}'
+
+      # Same identity/author-check reasoning as the diagnose job's own copy
+      # of this step -- see there for the full explanation.
+      - name: Find existing diagnostic comment
+        id: comment
+        env:
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.mint-ai-token.outputs.bot-login }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.number }}
+        run: |
+          set -euo pipefail
+          # See the diagnose job's own copy of this step for why this
+          # comes from mint-github-app-token's bot-login output, not
+          # `gh api user`.
+          bot_login="${BOT_LOGIN}"
+          BODY_FILE="${RUNNER_TEMP}/existing-comment-body.md"
+          comments_json=$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments?per_page=100" --jq '.[] | {id, body, user: .user.login}' | jq -s '.')
+          comment_id=$(jq -r --arg bot "${bot_login}" '
+            [.[] | select(.user == $bot) | select(.body | startswith("<!-- osac-ai-diagnostic-comment -->"))]
+            | if length > 0 then .[0].id else empty end
+          ' <<<"${comments_json}")
+          if [[ -n "${comment_id}" ]]; then
+            jq -r --arg id "${comment_id}" '.[] | select((.id|tostring) == $id) | .body' <<<"${comments_json}" > "${BODY_FILE}"
+            echo "id=${comment_id}" >> "${GITHUB_OUTPUT}"
+          else
+            : > "${BODY_FILE}"
+            echo "id=" >> "${GITHUB_OUTPUT}"
+          fi
+          echo "body-file=${BODY_FILE}" >> "${GITHUB_OUTPUT}"
+
+      # Nothing to update if there was never a failure comment -- never
+      # create one just to say things are fine.
+      - name: Prepare comment section
+        id: section
+        if: steps.comment.outputs.id != ''
+        env:
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+        run: |
+          set -euo pipefail
+          SECTION_FILE="${RUNNER_TEMP}/comment-section.md"
+          # Plain bold header -- see the diagnose job's own "Prepare
+          # comment section" step for why this isn't <sub>-wrapped.
+          {
+            echo "**✅ ${WORKFLOW_NAME} -- Passing**"
+            echo
+            echo "Previously failing; now passing as of [this run](${RUN_URL})."
+          } > "${SECTION_FILE}"
+          echo "section-file=${SECTION_FILE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build updated comment body
+        id: body
+        if: steps.comment.outputs.id != ''
+        env:
+          CURRENT_BODY_FILE: ${{ steps.comment.outputs.body-file }}
+          SECTION_KEY: ${{ github.event.workflow_run.name }}
+          SECTION_CONTENT_FILE: ${{ steps.section.outputs.section-file }}
+          OUTPUT_BODY_FILE: ${{ runner.temp }}/new-comment-body.md
+          # Deliberately no RUN_COST_USD/RUN_INPUT_TOKENS/RUN_OUTPUT_TOKENS
+          # here -- this job never runs a diagnosis, so there's no new
+          # cost to add. upsert-pr-comment.py carries the existing running
+          # total forward unchanged when these are absent.
+        run: python3 .github/scripts/upsert-pr-comment.py
+
+      - name: Upsert PR comment
+        if: steps.comment.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ steps.mint-ai-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.number }}
+          COMMENT_ID: ${{ steps.comment.outputs.id }}
+        run: |
+          set -euo pipefail
+          # Same re-check as the diagnose job's own copy of this step --
+          # see there for the full reasoning.
+          pr_state=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "unknown")
+          if [[ "${pr_state}" != "open" ]]; then
+            echo "PR #${PR_NUMBER} is no longer open (state: ${pr_state}); skipping comment."
+            exit 0
+          fi
+          jq -Rs '{body: .}' < "${RUNNER_TEMP}/new-comment-body.md" | gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" -X PATCH --input -

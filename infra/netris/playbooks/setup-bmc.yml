@@ -1,0 +1,7 @@
+---
+- name: Set up BMC network and sushy-tools
+  hosts: all
+  gather_facts: false
+  become: true
+  roles:
+    - setup-bmc

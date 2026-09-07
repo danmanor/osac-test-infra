@@ -1,0 +1,207 @@
+---
+name: Notify Slack
+description: Sends workflow status notifications to Slack
+
+inputs:
+  status:
+    description: 'Workflow status: success, failure, or warning'
+    required: true
+  workflow-name:
+    description: 'Workflow display name (e.g., "E2E VMaaS Full Install")'
+    required: true
+  slack-webhook-url:
+    description: >-
+      Slack incoming webhook URL. Used when slack-bot-token/slack-channel-id
+      are not provided. A webhook's response never includes a message
+      timestamp, so a notification sent this way can never be threaded onto
+      (message-ts stays empty) -- pass slack-bot-token/slack-channel-id
+      instead for any caller that needs to post follow-up replies.
+    required: false
+    default: ''
+  slack-bot-token:
+    description: >-
+      Slack bot token (xoxb-...) with chat:write scope. When this AND
+      slack-channel-id are both set, posts via the chat.postMessage Web
+      API instead of the webhook -- the only way to get back a message
+      timestamp (see the message-ts output) for later threaded replies.
+    required: false
+    default: ''
+  slack-channel-id:
+    description: 'Slack channel ID to post to (required alongside slack-bot-token; ignored for the webhook path, which has its own fixed target channel).'
+    required: false
+    default: ''
+  workflow-url:
+    description: 'GitHub workflow run URL'
+    required: true
+  branch-name:
+    description: 'Git branch name'
+    required: true
+  commit-sha:
+    description: 'Git commit SHA'
+    required: true
+  failed-step:
+    description: 'Detail text for failure or warning notifications (optional)'
+    required: false
+    default: ''
+  artifact-url:
+    description: 'URL to download artifacts (optional)'
+    required: false
+    default: ''
+  pr-info:
+    description: 'Pull request that triggered this run, e.g. "PR #166: <title> (<url>)" (optional)'
+    required: false
+    default: ''
+
+outputs:
+  message-ts:
+    description: >-
+      The posted message's Slack timestamp, usable as thread_ts for a
+      follow-up chat.postMessage reply. Only set when slack-bot-token/
+      slack-channel-id were used (the webhook path leaves this empty --
+      webhooks never return a ts at all).
+    value: ${{ steps.send.outputs.message-ts }}
+
+runs:
+  using: composite
+  steps:
+    - name: Send Slack notification
+      id: send
+      shell: bash
+      env:
+        INPUT_STATUS: ${{ inputs.status }}
+        INPUT_WORKFLOW_NAME: ${{ inputs.workflow-name }}
+        INPUT_BRANCH_NAME: ${{ inputs.branch-name }}
+        INPUT_COMMIT_SHA: ${{ inputs.commit-sha }}
+        INPUT_WORKFLOW_URL: ${{ inputs.workflow-url }}
+        INPUT_FAILED_STEP: ${{ inputs.failed-step }}
+        INPUT_ARTIFACT_URL: ${{ inputs.artifact-url }}
+        INPUT_PR_INFO: ${{ inputs.pr-info }}
+        INPUT_SLACK_WEBHOOK: ${{ inputs.slack-webhook-url }}
+        INPUT_SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
+        INPUT_SLACK_CHANNEL_ID: ${{ inputs.slack-channel-id }}
+      run: |
+        # Set status-specific values
+        if [ "$INPUT_STATUS" = "success" ]; then
+          ICON=":green_jenkins_circle:"
+          STATUS_TEXT="PASSED"
+          COLOR="#36a64f"
+        elif [ "$INPUT_STATUS" = "warning" ]; then
+          ICON=":warning:"
+          STATUS_TEXT="WARNING"
+          COLOR="#ff9900"
+        else
+          ICON=":red_jenkins_circle:"
+          STATUS_TEXT="FAILED"
+          COLOR="#ff0000"
+        fi
+
+        # Build message text. Warning must not say "SUCCEEDED" -- scan-workflow-logs
+        # passes the *e2e* workflow name with status=warning when credentials are
+        # found, which made Slack read like the e2e run passed (it often did not).
+        # Detail stays in the fields block (*Detail:*) below, same as before.
+        if [ "$INPUT_STATUS" = "success" ]; then
+          MESSAGE_TEXT="${ICON} ${INPUT_WORKFLOW_NAME} ${STATUS_TEXT}"
+        elif [ "$INPUT_STATUS" = "warning" ]; then
+          MESSAGE_TEXT="${ICON} ${INPUT_WORKFLOW_NAME} ${STATUS_TEXT}"
+        else
+          if [ -n "$INPUT_FAILED_STEP" ]; then
+            MESSAGE_TEXT="${ICON} ${INPUT_WORKFLOW_NAME} ${STATUS_TEXT} at ${INPUT_FAILED_STEP}"
+          else
+            MESSAGE_TEXT="${ICON} ${INPUT_WORKFLOW_NAME} ${STATUS_TEXT}"
+          fi
+        fi
+
+        # Build compact 2-column fields -- PR info and (for failures/warnings)
+        # detail are appended only when provided, so callers that don't
+        # pass them (e.g. existing e2e workflows) see no change in output.
+        FIELDS=$(jq -n \
+          --arg branch "$INPUT_BRANCH_NAME" \
+          --arg commit "${INPUT_COMMIT_SHA:0:7}" \
+          --arg pr_info "$INPUT_PR_INFO" \
+          --arg failed_step "$INPUT_FAILED_STEP" \
+          --arg status "$INPUT_STATUS" \
+          '[{"type": "mrkdwn", "text": ("*Branch:* " + $branch + " (" + $commit + ")")}]
+           + (if $pr_info != "" then [{"type": "mrkdwn", "text": ("*Triggered by:* " + $pr_info)}] else [] end)
+           + (if $failed_step != "" and $status == "failure" then [{"type": "mrkdwn", "text": ("*Failed step:* " + $failed_step)}] else [] end)
+           + (if $failed_step != "" and $status == "warning" then [{"type": "mrkdwn", "text": ("*Detail:* " + $failed_step)}] else [] end)')
+
+        # Build action buttons
+        if [ -n "$INPUT_ARTIFACT_URL" ]; then
+          ACTIONS=$(jq -n \
+            --arg workflow_url "$INPUT_WORKFLOW_URL" \
+            --arg artifact_url "$INPUT_ARTIFACT_URL" \
+            '{
+              "type": "actions",
+              "elements": [
+                {"type": "button", "text": {"type": "plain_text", "text": "View Run"}, "url": $workflow_url},
+                {"type": "button", "text": {"type": "plain_text", "text": "Artifacts"}, "url": $artifact_url}
+              ]
+            }')
+        else
+          ACTIONS=$(jq -n \
+            --arg workflow_url "$INPUT_WORKFLOW_URL" \
+            '{
+              "type": "actions",
+              "elements": [
+                {"type": "button", "text": {"type": "plain_text", "text": "View Run"}, "url": $workflow_url}
+              ]
+            }')
+        fi
+
+        # Build Slack payload
+        PAYLOAD=$(jq -n \
+          --arg text "$MESSAGE_TEXT" \
+          --arg color "$COLOR" \
+          --argjson fields "$FIELDS" \
+          --argjson actions "$ACTIONS" \
+          '{
+            "text": $text,
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": $text,
+                  "emoji": true
+                }
+              },
+              {
+                "type": "section",
+                "fields": $fields
+              },
+              $actions
+            ],
+            "attachments": [
+              {
+                "color": $color,
+                "fallback": $text
+              }
+            ]
+          }')
+
+        if [ -n "$INPUT_SLACK_BOT_TOKEN" ] && [ -n "$INPUT_SLACK_CHANNEL_ID" ]; then
+          # Bot-token path: chat.postMessage, not the webhook -- the only
+          # way to get back a message ts, since a notification sent this
+          # way may need threaded follow-up replies (the AI diagnosis, a
+          # chai-bot ping) posted onto it later in the same job.
+          echo "Sending notification to Slack via chat.postMessage..."
+          PAYLOAD=$(jq -n --argjson base "$PAYLOAD" --arg channel "$INPUT_SLACK_CHANNEL_ID" \
+            '$base + {"channel": $channel}')
+          RESPONSE=$(curl -sf --connect-timeout 10 --max-time 30 \
+            -X POST -H "Authorization: Bearer ${INPUT_SLACK_BOT_TOKEN}" \
+            -H 'Content-type: application/json; charset=utf-8' \
+            --data "$PAYLOAD" "https://slack.com/api/chat.postMessage")
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then
+            echo "::error::Slack chat.postMessage failed: $(echo "$RESPONSE" | jq -r '.error // "unknown error"')"
+            exit 1
+          fi
+          TS=$(echo "$RESPONSE" | jq -r '.ts')
+          echo "message-ts=${TS}" >> "$GITHUB_OUTPUT"
+        else
+          echo "Sending notification to Slack via webhook..."
+          curl -sf --connect-timeout 10 --max-time 30 \
+            -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$INPUT_SLACK_WEBHOOK"
+          # No ts available from a webhook response -- message-ts output
+          # simply stays unset for this path.
+        fi

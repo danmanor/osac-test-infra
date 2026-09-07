@@ -1,0 +1,6 @@
+---
+- name: Prepare OSAC installation
+  hosts: all
+  gather_facts: false
+  roles:
+    - prep-osac

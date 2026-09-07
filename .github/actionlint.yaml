@@ -1,0 +1,44 @@
+self-hosted-runner:
+  # Custom self-hosted runner labels used across this repo's workflows.
+  # Without this, actionlint flags every runs-on: <label> referencing one
+  # of these as "unknown label".
+  labels:
+    - osac-ci
+    - monitoring-central
+    - osac-ci-orchestrator
+    - osac-ci-small
+    # Per-host labels (fleet/inventory/hosts.yml's ci_runners group) used to
+    # be listed here too, since fleet-podman-cleanup.yml's matrix was a
+    # literal list actionlint could statically resolve. That list drifted
+    # from the real fleet (missing 5 hosts for 11+ days after an expansion)
+    # -- fleet-podman-cleanup.yml's matrix is now generated at runtime from
+    # fleet/inventory/hosts.yml itself, so `runs-on: ${{ matrix.host }}` is
+    # an expression again, same as every other workflow's runner-label
+    # input, and no longer needs a static entry here -- one fewer place
+    # this list can go stale.
+
+paths:
+  .github/workflows/**/*.yml:
+    ignore:
+      # actionlint's embedded shellcheck pass on run: blocks has no native
+      # severity threshold (unlike shellcheck's own --severity flag, applied
+      # separately via .shellcheckrc/pre-commit args for the standalone
+      # shellcheck hook) -- this repo had no bash static-check history
+      # before these hooks were added, so info/style findings across
+      # existing run: blocks are pre-existing, not new. Ignoring by embedded
+      # severity keeps real warning/error-level shellcheck findings (and
+      # everything else actionlint checks) failing the build.
+      - 'shellcheck reported issue in this script: SC[0-9]+:(info|style):'
+  .github/workflows/e2e-on-label.yml:
+    ignore:
+      # v1.7.12 schema has no job.workflow_* (added to GitHub 2026). Runtime
+      # values are documented; drop this when actionlint is bumped to v1.18+.
+      - 'property "workflow_(repository|sha)" is not defined'
+  .github/workflows/ai-diagnostic-e2e.yml:
+    ignore:
+      # v1.7.12 (released 2026-03-30) predates concurrency.queue, added to
+      # GitHub Actions 2026-05-07
+      # (https://github.blog/changelog/2026-05-07-github-actions-concurrency-groups-now-allow-larger-queues/).
+      # Confirmed real and working at runtime; drop this once actionlint's
+      # schema catches up.
+      - 'unexpected key "queue" for "concurrency" section'

@@ -1,0 +1,116 @@
+---
+- name: Detect effective OSAC namespace
+  ansible.builtin.shell:
+    cmd: oc get namespace {{ snapshot_osac_namespace }} >/dev/null 2>&1 && echo {{ snapshot_osac_namespace }} || echo {{ osac_namespace }}
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _detected_osac_ns
+  changed_when: false
+  failed_when: false
+
+- name: Set effective OSAC namespace
+  ansible.builtin.set_fact:
+    _osac_namespace: "{{ _detected_osac_ns.stdout | default(osac_namespace) }}"
+
+- name: Create mgmt-cluster gather subdirectories
+  ansible.builtin.file:
+    path: "{{ _gather_dir }}/mgmt-cluster/{{ item }}"
+    state: directory
+    mode: "0755"
+  failed_when: false
+  loop:
+    - node
+
+# ── SNO VM node-level diagnostics (via SSH) ──
+- name: Set SNO VM SSH command
+  ansible.builtin.set_fact:
+    _sno_ssh: "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i {{ snapshot_flavor_dir }}/crypto/cluster-tool.key core@{{ ocp_dnat_ip }}"
+
+- name: Gather kubelet journal from SNO VM
+  ansible.builtin.shell: "{{ _sno_ssh }} 'sudo journalctl -u kubelet --no-pager -n 200' > {{ _gather_dir }}/mgmt-cluster/node/kubelet-journal 2>&1 || echo 'SSH unreachable' > {{ _gather_dir }}/mgmt-cluster/node/kubelet-journal"
+  changed_when: false
+  failed_when: false
+
+- name: Gather crio journal from SNO VM
+  ansible.builtin.shell: "{{ _sno_ssh }} 'sudo journalctl -u crio --no-pager -n 200' > {{ _gather_dir }}/mgmt-cluster/node/crio-journal 2>&1 || echo 'SSH unreachable' > {{ _gather_dir }}/mgmt-cluster/node/crio-journal"
+  changed_when: false
+  failed_when: false
+
+- name: Gather boot-time service status from SNO VM
+  ansible.builtin.shell: |
+    {{ _sno_ssh }} '
+      for svc in snapshot-recert ovs-configuration nodeip-configuration NetworkManager; do
+        echo "=== $svc ==="
+        sudo systemctl status "$svc" --no-pager 2>&1
+        echo
+      done
+    ' > {{ _gather_dir }}/mgmt-cluster/node/boot-services 2>&1 || echo 'SSH unreachable' > {{ _gather_dir }}/mgmt-cluster/node/boot-services
+  changed_when: false
+  failed_when: false
+
+- name: Gather snapshot-recert service journal from SNO VM
+  ansible.builtin.shell: "{{ _sno_ssh }} 'sudo journalctl -u snapshot-recert.service --no-pager' > {{ _gather_dir }}/mgmt-cluster/node/snapshot-recert-journal 2>&1 || echo 'SSH unreachable' > {{ _gather_dir }}/mgmt-cluster/node/snapshot-recert-journal"
+  changed_when: false
+  failed_when: false
+
+- name: Gather snapshot-recert markers from SNO VM
+  ansible.builtin.shell: "{{ _sno_ssh }} 'ls -la /var/lib/snapshot-recert/markers/ 2>&1 || echo \"(no markers)\"' > {{ _gather_dir }}/mgmt-cluster/node/snapshot-recert-markers 2>&1 || echo 'SSH unreachable' > {{ _gather_dir }}/mgmt-cluster/node/snapshot-recert-markers"
+  changed_when: false
+  failed_when: false
+
+- name: Gather recert summary from SNO VM
+  ansible.builtin.shell: |
+    {{ _sno_ssh }} 'sudo cat /var/tmp/recert-summary.yaml 2>/dev/null || echo "(not found)"' \
+      | sed -E \
+        -e '/BEGIN (RSA |EC )?PRIVATE KEY/,/END (RSA |EC )?PRIVATE KEY/c\<PRIVATE KEY REDACTED>' \
+        -e 's/("\.dockerconfigjson"|"pull-secret"|"password"|"token"|"secret"):[[:space:]]*"[^"]*"/\1: "<REDACTED>"/g' \
+      > {{ _gather_dir }}/mgmt-cluster/node/recert-summary 2>&1 || echo 'SSH unreachable' > {{ _gather_dir }}/mgmt-cluster/node/recert-summary
+  changed_when: false
+  failed_when: false
+
+- name: Gather crictl pods from SNO VM
+  ansible.builtin.shell: "{{ _sno_ssh }} 'sudo crictl pods' > {{ _gather_dir }}/mgmt-cluster/node/crictl-pods 2>&1 || echo 'SSH unreachable' > {{ _gather_dir }}/mgmt-cluster/node/crictl-pods"
+  changed_when: false
+  failed_when: false
+
+- name: Gather crictl containers from SNO VM
+  ansible.builtin.shell: "{{ _sno_ssh }} 'sudo crictl ps -a' > {{ _gather_dir }}/mgmt-cluster/node/crictl-containers 2>&1 || echo 'SSH unreachable' > {{ _gather_dir }}/mgmt-cluster/node/crictl-containers"
+  changed_when: false
+  failed_when: false
+
+- name: Gather systemd failed units from SNO VM
+  ansible.builtin.shell: "{{ _sno_ssh }} 'sudo systemctl --failed --no-pager' > {{ _gather_dir }}/mgmt-cluster/node/failed-units 2>&1 || echo 'SSH unreachable' > {{ _gather_dir }}/mgmt-cluster/node/failed-units"
+  changed_when: false
+  failed_when: false
+
+# ── Management cluster must-gather + inspect ──
+- name: Run oc adm must-gather on management cluster
+  ansible.builtin.shell: |
+    oc adm must-gather \
+      --dest-dir={{ _gather_dir }}/mgmt-cluster/must-gather \
+      2>&1 || echo "must-gather failed or cluster unreachable"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false
+
+- name: Run oc adm inspect on non-openshift namespaces
+  ansible.builtin.shell: |
+    oc adm inspect \
+      ns/{{ _osac_namespace }} \
+      ns/osac-operators \
+      ns/osac-prereqs \
+      ns/keycloak \
+      ns/multicluster-engine \
+      ns/cert-manager \
+      ns/cert-manager-operator \
+      ns/metallb-system \
+      ns/ansible-aap \
+      ns/openshift-cnv \
+      ns/openshift-storage \
+      --dest-dir={{ _gather_dir }}/mgmt-cluster/inspect \
+      2>&1 || echo "inspect failed or cluster unreachable"
+  environment:
+    KUBECONFIG: /root/.kube/config
+  changed_when: false
+  failed_when: false

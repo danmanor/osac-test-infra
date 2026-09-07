@@ -37,11 +37,11 @@ ls osac-test-infra/tests/caas/
 
 Then read the infrastructure files:
 1. `osac-test-infra/tests/conftest.py` — session fixtures (grpc, k8s_hub_client, cli, namespace)
-2. `osac-test-infra/tests/vmaas/conftest.py` — VMaaS fixtures (k8s_virt_client, vm_template, network_class)
-3. `osac-test-infra/tests/grpc_client.py` — available gRPC methods
-4. `osac-test-infra/tests/k8s_client.py` — available K8s query methods
-5. `osac-test-infra/tests/helpers.py` — available wait helpers
-6. `osac-test-infra/tests/runner.py` — run, run_unchecked, poll_until, env
+2. `osac-test-infra/tests/vmaas/conftest.py` — VMaaS fixtures (k8s_virt_client, vm_template)
+3. `osac-test-infra/tests/core/grpc_client.py` — available gRPC methods
+4. `osac-test-infra/tests/core/k8s_client.py` — available K8s query methods
+5. `osac-test-infra/tests/core/helpers.py` — available wait helpers
+6. `osac-test-infra/tests/core/runner.py` — run, run_unchecked, poll_until, env
 
 Find the **most similar existing test** by reading test files and comparing their patterns to what you need. Read that test file completely — it's your reference pattern.
 
@@ -51,9 +51,9 @@ Present the user with:
 
 1. **Reference test:** which existing test you're basing the pattern on and why
 2. **Files to modify:**
-   - `tests/grpc_client.py` — what methods to add (if any)
-   - `tests/k8s_client.py` — what methods to add (if any)
-   - `tests/helpers.py` — what wait helpers to add (if any)
+   - `tests/core/grpc_client.py` — what methods to add (if any)
+   - `tests/core/k8s_client.py` — what methods to add (if any)
+   - `tests/core/helpers.py` — what wait helpers to add (if any)
    - `tests/vmaas/test_<name>.py` or `tests/caas/test_<name>.py` — the new test file
 3. **Test flow:** step-by-step description of what the test does
 4. **gRPC services used:** the exact `osac.public.v1.<Service>/<Method>` calls
@@ -134,10 +134,10 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from tests.grpc_client import GRPCClient
-from tests.helpers import ...
-from tests.k8s_client import K8sClient
-from tests.runner import poll_until
+from tests.core.grpc_client import GRPCClient
+from tests.core.helpers import ...
+from tests.core.k8s_client import K8sClient
+from tests.core.runner import poll_until
 
 
 def test_<name>(grpc: GRPCClient, k8s_hub_client: K8sClient, ...) -> None:
@@ -159,8 +159,8 @@ def test_<name>(grpc: GRPCClient, k8s_hub_client: K8sClient, ...) -> None:
 
 ```bash
 cd osac-test-infra
-ruff check tests/grpc_client.py tests/k8s_client.py tests/helpers.py tests/vmaas/test_<name>.py
-ruff format --check tests/grpc_client.py tests/k8s_client.py tests/helpers.py tests/vmaas/test_<name>.py
+ruff check tests/core/grpc_client.py tests/core/k8s_client.py tests/core/helpers.py tests/vmaas/test_<name>.py
+ruff format --check tests/core/grpc_client.py tests/core/k8s_client.py tests/core/helpers.py tests/vmaas/test_<name>.py
 ```
 
 If lint or format fails, fix and re-run. Show the full diff to the user.
@@ -175,7 +175,7 @@ git add <changed-files>
 git commit -m "<KEY>: add <name> E2E test
 
 <1-2 line description of what the test covers>"
-git push -u origin <branch-name>
+git push -u fork <branch-name>
 gh pr create \
   --repo osac-project/osac-test-infra \
   --title "<KEY>: add <name> E2E test" \
@@ -203,7 +203,6 @@ Report the PR URL when done.
 - `cli` — `OsacCLI` logged in
 - `k8s_virt_client` — `K8sClient` for the VM cluster (VMaaS only, from `OSAC_VM_KUBECONFIG`)
 - `vm_template` — from `OSAC_VM_TEMPLATE` env var
-- `network_class` — from `OSAC_NETWORK_CLASS` env var
 
 **gRPC API package:** `osac.public.v1` (public), `osac.private.v1` (private)
 

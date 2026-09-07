@@ -1,0 +1,49 @@
+---
+name: Fetch EC2 runner GitHub App token
+description: >-
+  Retrieve a temporary GitHub App installation token from Vault for registering
+  JIT runners. The generate-jitconfig endpoint does not support personal access
+  tokens (fine-grained or classic), so we use a GitHub App instead.
+
+  This action:
+  1. Fetches app_id and private_key from Vault
+  2. Mints an installation token via mint-github-app-token (valid 1 hour)
+  3. Outputs the token for use in runner registration
+
+inputs:
+  role-id:
+    required: true
+  secret-id:
+    required: true
+
+outputs:
+  GH_TOKEN:
+    value: ${{ steps.github-app-token.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Retrieve GitHub App credentials from Vault
+      id: vault
+      uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
+      with:
+        url: http://127.0.0.1:8200
+        method: approle
+        roleId: ${{ inputs.role-id }}
+        secretId: ${{ inputs.secret-id }}
+        exportEnv: false
+        secrets: |
+          secret/data/osac/e2e/ec2-runner-github-app app_id | APP_ID ;
+          secret/data/osac/e2e/ec2-runner-github-app private_key | PRIVATE_KEY
+
+    - name: Generate GitHub App installation token
+      id: github-app-token
+      uses: ./.github/actions/mint-github-app-token
+      with:
+        app-id: ${{ steps.vault.outputs.APP_ID }}
+        private-key: ${{ steps.vault.outputs.PRIVATE_KEY }}
+        account-login: osac-project
+        repositories: ${{ github.event.repository.name }}
+        # Minimal scope for JIT runner registration -- unchanged from
+        # before this action was refactored to share mint-github-app-token.
+        permissions: '{"administration":"write"}'
