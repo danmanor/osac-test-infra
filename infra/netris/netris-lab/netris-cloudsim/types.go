@@ -74,6 +74,7 @@ type NetrisController struct {
 type NetrisInfo struct {
 	Links            []link.Link
 	BGPLinks         []link.Link
+	PortIndexes      map[int]int
 	Hardware         []inventory.HW
 	SiteName         string
 	MGMTSubnets      []ipam.IPAM
@@ -95,14 +96,15 @@ type VMResources struct {
 }
 
 type LinkMapping struct {
-	LocalID     int
-	Local       string
-	Remote      string
-	RemoteID    int
-	LocalIP     string
-	RemoteIP    string
-	BGPLocalIP  string
-	BGPRemoteIP string
+	LocalPortIndex int
+	LocalID        int
+	Local          string
+	Remote         string
+	RemoteID       int
+	LocalIP        string
+	RemoteIP       string
+	BGPLocalIP     string
+	BGPRemoteIP    string
 }
 
 type ToTemplate struct {
