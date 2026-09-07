@@ -52,3 +52,12 @@ repos:
     rev: v1.7.12
     hooks:
       - id: actionlint
+
+  - repo: local
+    hooks:
+      - id: optional-dispatch-plan-tests
+        name: Optional workflow dispatch plan tests
+        entry: bash .github/scripts/test-optional-dispatch-plan.sh
+        language: system
+        files: ^(\.github/scripts/optional-dispatch-plan\.sh|\.github/scripts/test-optional-dispatch-plan\.sh|\.github/workflows/slash-command-handler\.yml)$
+        pass_filenames: false

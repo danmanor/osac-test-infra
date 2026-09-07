@@ -27,6 +27,7 @@ jobs:
           path: .slash-command-tools
           sparse-checkout: |
             .github/scripts/optional-workflows.sh
+            .github/scripts/optional-dispatch-plan.sh
           persist-credentials: false
 
       - name: Check permissions
@@ -342,6 +343,7 @@ jobs:
           !startsWith(steps.cmd.outputs.command, 'cancel:')
         env:
           COMMAND: ${{ steps.cmd.outputs.command }}
+          OPTIONAL_DISPATCH_PLAN_TOOL: ${{ github.workspace }}/.slash-command-tools/.github/scripts/optional-dispatch-plan.sh
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           HEAD_BRANCH: ${{ steps.pr.outputs.head_branch }}
           HEAD_REPOSITORY: ${{ steps.pr.outputs.head_repository }}
@@ -362,8 +364,14 @@ jobs:
           }
 
           if jq -e --arg cmd "${COMMAND}" 'any(.[]; .command == $cmd)' /tmp/optional.json > /dev/null; then
-            OPTIONAL_WORKFLOW=$(jq -r --arg cmd "${COMMAND}" '.[] | select(.command == $cmd) | .workflow' /tmp/optional.json)
-            MARKER="PR #${PR_NUMBER} @ ${HEAD_SHA}"
+            OPTIONAL_PLAN=$(bash "${OPTIONAL_DISPATCH_PLAN_TOOL}" plan \
+              /tmp/optional.json "${COMMAND}" "${DEFAULT_BRANCH}" \
+              "${PR_NUMBER}" "${HEAD_REPOSITORY}" "${HEAD_BRANCH}" "${HEAD_SHA}" \
+              "${HEAD_AUTHOR}" "${AUTHOR_ASSOCIATION}" "${IS_FORK}")
+            OPTIONAL_WORKFLOW=$(jq -r '.workflow' <<< "${OPTIONAL_PLAN}")
+            MARKER=$(jq -r '.marker' <<< "${OPTIONAL_PLAN}")
+            DISPATCH_REF=$(jq -r '.default_branch' <<< "${OPTIONAL_PLAN}")
+            mapfile -t DISPATCH_ARGS < <(jq -r '.dispatch_args[]' <<< "${OPTIONAL_PLAN}")
 
             CURRENT_PR_JSON=$(gh pr view "${PR_NUMBER}" -R "${REPO}" \
               --json headRefName,headRefOid,headRepository)
@@ -397,22 +405,9 @@ jobs:
             fi
 
             STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-            DISPATCH_ARGS=(
-              -f "pr-number=${PR_NUMBER}"
-              -f "pr-repository=${HEAD_REPOSITORY}"
-              -f "pr-ref=${HEAD_BRANCH}"
-              -f "pr-sha=${HEAD_SHA}"
-            )
-            if [[ "${IS_FORK}" == "true" ]]; then
-              DISPATCH_ARGS+=(
-                -f "fork-pr-author-association=${AUTHOR_ASSOCIATION}"
-                -f "fork-pr-author=${HEAD_AUTHOR}"
-              )
-            fi
-
             if ! gh workflow run "${OPTIONAL_WORKFLOW}" \
               -R "${REPO}" \
-              --ref "${DEFAULT_BRANCH}" \
+              --ref "${DISPATCH_REF}" \
               "${DISPATCH_ARGS[@]}"; then
               gh pr comment "${PR_NUMBER}" -R "${REPO}" \
                 --body "Failed to dispatch optional workflow \`${OPTIONAL_WORKFLOW}\` for \`${HEAD_SHA:0:7}\`."
