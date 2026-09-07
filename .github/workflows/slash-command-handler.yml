@@ -514,7 +514,7 @@ jobs:
             --json databaseId,name,headSha \
             --jq "[.[] | select(.headSha == \"${HEAD_SHA}\") | [.databaseId, .name]] | .[] | @tsv")
 
-          while IFS=$'\t' read -r OPTIONAL_WORKFLOW OPTIONAL_COMMAND; do
+          while IFS=$'\t' read -r OPTIONAL_WORKFLOW _command; do
             [ -z "${OPTIONAL_WORKFLOW}" ] && continue
             MARKER="PR #${PR_NUMBER} @ ${HEAD_SHA}"
             OPTIONAL_RUNS=$(gh run list \
