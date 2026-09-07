@@ -1,7 +1,7 @@
 version: 1
 
 workflows:
-  - command: bmaas-netris
+  - command: e2e-bmaas-netris-full-install
     workflow: e2e-bmaas-netris-full-install-caller.yml
     name: E2E BMaaS Netris
     description: BMaaS networking tests on the Netris infrastructure
