@@ -43,7 +43,7 @@ expect_failure() {
 cat >"${TEST_DIR}/optional.json" <<'JSON'
 [
   {
-    "command": "bmaas-netris",
+    "command": "e2e-bmaas-netris-full-install",
     "workflow": "e2e-bmaas-netris-full-install-caller.yml",
     "name": "E2E BMaaS Netris",
     "description": "BMaaS networking tests on the Netris infrastructure",
@@ -55,7 +55,7 @@ JSON
 
 same_repo_plan=$("${PLAN_SCRIPT}" plan \
   "${TEST_DIR}/optional.json" \
-  bmaas-netris main 42 osac-project/osac-test-infra feature/test abc1234 \
+  e2e-bmaas-netris-full-install main 42 osac-project/osac-test-infra feature/test abc1234 \
   '' '' false)
 assert_eq "same-repository plan" \
   '{"workflow":"e2e-bmaas-netris-full-install-caller.yml","marker":"PR #42 @ abc1234","default_branch":"main","dispatch_args":["-f","pr-number=42","-f","pr-repository=osac-project/osac-test-infra","-f","pr-ref=feature/test","-f","pr-sha=abc1234"]}' \
@@ -63,7 +63,7 @@ assert_eq "same-repository plan" \
 
 fork_plan=$("${PLAN_SCRIPT}" plan \
   "${TEST_DIR}/optional.json" \
-  bmaas-netris main 42 danmanor/osac-test-infra feature/test abc1234 \
+  e2e-bmaas-netris-full-install main 42 danmanor/osac-test-infra feature/test abc1234 \
   alice member true)
 assert_eq "fork plan includes authorization metadata" \
   '{"workflow":"e2e-bmaas-netris-full-install-caller.yml","marker":"PR #42 @ abc1234","default_branch":"main","dispatch_args":["-f","pr-number=42","-f","pr-repository=danmanor/osac-test-infra","-f","pr-ref=feature/test","-f","pr-sha=abc1234","-f","fork-pr-author-association=member","-f","fork-pr-author=alice"]}' \
