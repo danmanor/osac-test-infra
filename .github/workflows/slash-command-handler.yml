@@ -22,7 +22,7 @@ jobs:
       - name: Checkout slash-command registry helper
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: osac-project/osac-test-infra
+          repository: danmanor/osac-test-infra
           ref: main
           path: .slash-command-tools
           sparse-checkout: |
