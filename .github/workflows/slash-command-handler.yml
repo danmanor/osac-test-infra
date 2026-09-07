@@ -53,14 +53,13 @@ jobs:
       - name: Get PR details
         id: pr
         run: |
-          PR_JSON=$(gh pr view "${PR_NUMBER}" -R "${REPO}" \
-            --json headRefName,headRefOid,headRepository,author,authorAssociation)
+          PR_JSON=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
 
-          HEAD_BRANCH=$(echo "${PR_JSON}" | jq -r '.headRefName')
-          HEAD_SHA=$(echo "${PR_JSON}" | jq -r '.headRefOid')
-          HEAD_REPOSITORY=$(echo "${PR_JSON}" | jq -r '.headRepository.nameWithOwner // empty')
-          HEAD_AUTHOR=$(echo "${PR_JSON}" | jq -r '.author.login // empty')
-          AUTHOR_ASSOCIATION=$(echo "${PR_JSON}" | jq -r '.authorAssociation // empty')
+          HEAD_BRANCH=$(echo "${PR_JSON}" | jq -r '.head.ref')
+          HEAD_SHA=$(echo "${PR_JSON}" | jq -r '.head.sha')
+          HEAD_REPOSITORY=$(echo "${PR_JSON}" | jq -r '.head.repo.full_name // empty')
+          HEAD_AUTHOR=$(echo "${PR_JSON}" | jq -r '.user.login // empty')
+          AUTHOR_ASSOCIATION=$(echo "${PR_JSON}" | jq -r '.author_association // empty')
 
           echo "head_branch=${HEAD_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
