@@ -31,26 +31,42 @@ IS_FORK=${11}
 
 WORKFLOW=$(jq -er --arg command "${COMMAND}" \
   '.[] | select(.command == $command) | .workflow' "${REGISTRY_JSON}")
+TRIGGER=$(jq -er --arg command "${COMMAND}" \
+  '.[] | select(.command == $command) | (.trigger // "workflow_dispatch")' "${REGISTRY_JSON}")
+LABEL=$(jq -r --arg command "${COMMAND}" \
+  '.[] | select(.command == $command) | (.label // "")' "${REGISTRY_JSON}")
 MARKER="PR #${PR_NUMBER} @ ${HEAD_SHA}"
 
-DISPATCH_ARGS=(
-  -f "pr-number=${PR_NUMBER}"
-  -f "pr-repository=${HEAD_REPOSITORY}"
-  -f "pr-ref=${HEAD_BRANCH}"
-  -f "pr-sha=${HEAD_SHA}"
-)
-if [[ "${IS_FORK}" == "true" ]]; then
-  DISPATCH_ARGS+=(
-    -f "fork-pr-author-association=${AUTHOR_ASSOCIATION}"
-    -f "fork-pr-author=${HEAD_AUTHOR}"
+DISPATCH_ARGS=()
+if [[ "${TRIGGER}" == "workflow_dispatch" ]]; then
+  DISPATCH_ARGS=(
+    -f "pr-number=${PR_NUMBER}"
+    -f "pr-repository=${HEAD_REPOSITORY}"
+    -f "pr-ref=${HEAD_BRANCH}"
+    -f "pr-sha=${HEAD_SHA}"
   )
+  if [[ "${IS_FORK}" == "true" ]]; then
+    DISPATCH_ARGS+=(
+      -f "fork-pr-author-association=${AUTHOR_ASSOCIATION}"
+      -f "fork-pr-author=${HEAD_AUTHOR}"
+    )
+  fi
+elif [[ "${TRIGGER}" != "label" || -z "${LABEL}" ]]; then
+  echo "optional-dispatch-plan: invalid trigger metadata for ${COMMAND}" >&2
+  exit 1
 fi
 
-DISPATCH_ARGS_JSON=$(printf '%s\n' "${DISPATCH_ARGS[@]}" | jq -Rsc 'split("\n")[:-1]')
+if ((${#DISPATCH_ARGS[@]} > 0)); then
+  DISPATCH_ARGS_JSON=$(printf '%s\n' "${DISPATCH_ARGS[@]}" | jq -Rsc 'split("\n")[:-1]')
+else
+  DISPATCH_ARGS_JSON='[]'
+fi
 jq -cn \
   --arg workflow "${WORKFLOW}" \
   --arg marker "${MARKER}" \
   --arg default_branch "${DEFAULT_BRANCH}" \
+  --arg trigger "${TRIGGER}" \
+  --arg label "${LABEL}" \
   --argjson dispatch_args "${DISPATCH_ARGS_JSON}" \
   '{workflow: $workflow, marker: $marker, default_branch: $default_branch,
-    dispatch_args: $dispatch_args}'
+    trigger: $trigger, label: $label, dispatch_args: $dispatch_args}'

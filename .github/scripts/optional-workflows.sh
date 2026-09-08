@@ -76,6 +76,8 @@ for ((index = 0; index < WORKFLOW_COUNT; index++)); do
   workflow=$(jq -r --argjson index "${index}" '.workflows[$index].workflow // empty' "${REGISTRY_JSON}")
   name=$(jq -r --argjson index "${index}" '.workflows[$index].name // empty' "${REGISTRY_JSON}")
   description=$(jq -r --argjson index "${index}" '.workflows[$index].description // empty' "${REGISTRY_JSON}")
+  trigger=$(jq -r --argjson index "${index}" '.workflows[$index].trigger // "workflow_dispatch"' "${REGISTRY_JSON}")
+  label=$(jq -r --argjson index "${index}" '.workflows[$index].label // ""' "${REGISTRY_JSON}")
   retestable_type=$(jq -r --argjson index "${index}" '
     .workflows[$index].retestable // empty |
     if . == "" then "missing" else type end
@@ -93,6 +95,15 @@ for ((index = 0; index < WORKFLOW_COUNT; index++)); do
     die "workflows[${index}].workflow must be a workflow filename: ${workflow}"
   [[ -n "${name}" ]] || die "workflows[${index}].name must be non-empty"
   [[ -n "${description}" ]] || die "workflows[${index}].description must be non-empty"
+  [[ "${trigger}" == "workflow_dispatch" || "${trigger}" == "label" ]] ||
+    die "workflows[${index}].trigger must be workflow_dispatch or label"
+  if [[ "${trigger}" == "label" ]]; then
+    [[ "${label}" =~ ^[a-z0-9][a-z0-9-]*$ ]] ||
+      die "workflows[${index}].label must match [a-z0-9][a-z0-9-]* when trigger is label"
+  else
+    [[ -z "${label}" ]] ||
+      die "workflows[${index}].label is only valid when trigger is label"
+  fi
   [[ "${retestable_type}" == "boolean" ]] ||
     die "workflows[${index}].retestable must be boolean"
 
@@ -117,10 +128,13 @@ for ((index = 0; index < WORKFLOW_COUNT; index++)); do
     --arg workflow "${workflow}" \
     --arg name "${name}" \
     --arg description "${description}" \
+    --arg trigger "${trigger}" \
+    --arg label "${label}" \
     --arg workflow_id "${workflow_id}" \
     --argjson retestable "$(jq -r --argjson index "${index}" '.workflows[$index].retestable' "${REGISTRY_JSON}")" \
     '{command: $command, workflow: $workflow, name: $name, description: $description,
-      workflow_id: ($workflow_id | tonumber), retestable: $retestable}' \
+      trigger: $trigger, label: $label, workflow_id: ($workflow_id | tonumber),
+      retestable: $retestable}' \
     >>"${ENTRIES_JSONL}"
 done
 

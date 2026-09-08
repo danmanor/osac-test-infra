@@ -170,8 +170,24 @@ jobs:
             WORKFLOW_YAML=$(mktemp)
             WORKFLOW_PATH="repos/${REPO}/contents/.github/workflows/${WORKFLOW}?ref=${DEFAULT_BRANCH}"
             gh api "${WORKFLOW_PATH}" --jq '.content' | base64 --decode > "${WORKFLOW_YAML}"
-            if ! yq -e 'has("on") and (.on | has("workflow_dispatch"))' "${WORKFLOW_YAML}" > /dev/null; then
-              echo "::error::Registered workflow ${WORKFLOW} does not define workflow_dispatch."
+            TRIGGER=$(jq -r --arg workflow "${WORKFLOW}" \
+              '.[] | select(.workflow == $workflow) | (.trigger // "workflow_dispatch")' \
+              /tmp/optional.json)
+            if [[ "${TRIGGER}" == "workflow_dispatch" ]]; then
+              if yq -e 'has("on") and (.on | has("workflow_dispatch"))' "${WORKFLOW_YAML}" >/dev/null; then
+                VALID_TRIGGER=true
+              else
+                VALID_TRIGGER=false
+              fi
+            else
+              if yq -e 'has("on") and (.on | has("pull_request_target"))' "${WORKFLOW_YAML}" >/dev/null; then
+                VALID_TRIGGER=true
+              else
+                VALID_TRIGGER=false
+              fi
+            fi
+            if [[ "${VALID_TRIGGER}" != "true" ]]; then
+              echo "::error::Registered workflow ${WORKFLOW} does not define the ${TRIGGER} trigger."
               exit 1
             fi
           done < <(jq -r '.[].workflow' /tmp/optional.json)
@@ -349,6 +365,7 @@ jobs:
           HEAD_AUTHOR: ${{ steps.pr.outputs.head_author }}
           AUTHOR_ASSOCIATION: ${{ steps.pr.outputs.author_association }}
           IS_FORK: ${{ steps.pr.outputs.is_fork }}
+          TRIGGER_GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
         run: |
           SUCCEEDED=""
           FAILED=""
@@ -369,6 +386,8 @@ jobs:
               "${HEAD_AUTHOR}" "${AUTHOR_ASSOCIATION}" "${IS_FORK}")
             OPTIONAL_WORKFLOW=$(jq -r '.workflow' <<< "${OPTIONAL_PLAN}")
             MARKER=$(jq -r '.marker' <<< "${OPTIONAL_PLAN}")
+            OPTIONAL_TRIGGER=$(jq -r '.trigger // "workflow_dispatch"' <<< "${OPTIONAL_PLAN}")
+            OPTIONAL_LABEL=$(jq -r '.label // ""' <<< "${OPTIONAL_PLAN}")
             DISPATCH_REF=$(jq -r '.default_branch' <<< "${OPTIONAL_PLAN}")
             mapfile -t DISPATCH_ARGS < <(jq -r '.dispatch_args[]' <<< "${OPTIONAL_PLAN}")
 
@@ -387,12 +406,17 @@ jobs:
               exit 1
             fi
 
+            if [[ "${OPTIONAL_TRIGGER}" == "label" ]]; then
+              RUN_EVENT="pull_request_target"
+            else
+              RUN_EVENT="workflow_dispatch"
+            fi
             ACTIVE_RUN=$(gh run list \
               -R "${REPO}" \
               --workflow "${OPTIONAL_WORKFLOW}" \
               --limit 200 \
               --json databaseId,status,event,displayTitle,url \
-              --jq "[.[] | select(.event == \"workflow_dispatch\" and .status != \"completed\" and ((.displayTitle // \"\") | contains(\"${MARKER}\"))) | [.databaseId, .url]] | first | if . then @tsv else empty end")
+              --jq "[.[] | select(.event == \"${RUN_EVENT}\" and .status != \"completed\" and ((.displayTitle // \"\") | contains(\"${MARKER}\"))) | [.databaseId, .url]] | first | if . then @tsv else empty end")
 
             if [[ -n "${ACTIVE_RUN}" ]]; then
               IFS=$'\t' read -r ACTIVE_RUN_ID ACTIVE_RUN_URL <<< "${ACTIVE_RUN}"
@@ -404,7 +428,33 @@ jobs:
             fi
 
             STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-            if ! gh workflow run "${OPTIONAL_WORKFLOW}" \
+            if [[ "${OPTIONAL_TRIGGER}" == "label" ]]; then
+              if [[ -z "${TRIGGER_GH_TOKEN}" ]]; then
+                gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+                  --body "Cannot trigger optional workflow \`${OPTIONAL_WORKFLOW}\`: the label-trigger token is not configured."
+                gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+                  -f content='confused' --silent 2>/dev/null || true
+                exit 1
+              fi
+              if ! GH_TOKEN="${TRIGGER_GH_TOKEN}" gh label list "${OPTIONAL_LABEL}" \
+                -R "${REPO}" --limit 1 --json name --jq '.[].name' | grep -Fxq "${OPTIONAL_LABEL}"; then
+                GH_TOKEN="${TRIGGER_GH_TOKEN}" gh label create "${OPTIONAL_LABEL}" \
+                  -R "${REPO}" --color 1D76DB --description "Manual optional BMaaS Netris E2E trigger"
+              fi
+              if GH_TOKEN="${TRIGGER_GH_TOKEN}" gh pr view "${PR_NUMBER}" -R "${REPO}" \
+                --json labels --jq '.labels[].name' 2>/dev/null | grep -Fxq "${OPTIONAL_LABEL}"; then
+                GH_TOKEN="${TRIGGER_GH_TOKEN}" gh pr edit "${PR_NUMBER}" -R "${REPO}" \
+                  --remove-label "${OPTIONAL_LABEL}"
+              fi
+              if ! GH_TOKEN="${TRIGGER_GH_TOKEN}" gh pr edit "${PR_NUMBER}" -R "${REPO}" \
+                --add-label "${OPTIONAL_LABEL}"; then
+                gh pr comment "${PR_NUMBER}" -R "${REPO}" \
+                  --body "Failed to apply trigger label \`${OPTIONAL_LABEL}\` for \`${HEAD_SHA:0:7}\`."
+                gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+                  -f content='confused' --silent 2>/dev/null || true
+                exit 1
+              fi
+            elif ! gh workflow run "${OPTIONAL_WORKFLOW}" \
               -R "${REPO}" \
               --ref "${DISPATCH_REF}" \
               "${DISPATCH_ARGS[@]}"; then
@@ -422,7 +472,7 @@ jobs:
                 --workflow "${OPTIONAL_WORKFLOW}" \
                 --limit 200 \
                 --json status,event,displayTitle,createdAt,url \
-                --jq "[.[] | select(.event == \"workflow_dispatch\" and ((.displayTitle // \"\") | contains(\"${MARKER}\")) and .createdAt >= \"${STARTED_AT}\")] | sort_by(.createdAt) | (last // {}) | .url // \"\"")
+                --jq "[.[] | select(.event == \"${RUN_EVENT}\" and ((.displayTitle // \"\") | contains(\"${MARKER}\")) and .createdAt >= \"${STARTED_AT}\")] | sort_by(.createdAt) | (last // {}) | .url // \"\"")
               [[ -n "${RUN_URL}" ]] && break
               sleep 2
             done
@@ -431,7 +481,7 @@ jobs:
             fi
 
             gh pr comment "${PR_NUMBER}" -R "${REPO}" \
-              --body "Dispatched optional \`/test ${COMMAND}\` for \`${HEAD_SHA:0:7}\`: [workflow run](${RUN_URL})."
+              --body "Triggered optional \`/test ${COMMAND}\` for \`${HEAD_SHA:0:7}\`: [workflow run](${RUN_URL})."
             gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
               -f content='rocket' --silent 2>/dev/null || true
             exit 0
@@ -484,6 +534,7 @@ jobs:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           HEAD_BRANCH: ${{ steps.pr.outputs.head_branch }}
           HEAD_REPOSITORY: ${{ steps.pr.outputs.head_repository }}
+          TRIGGER_GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
         run: |
           CURRENT_PR_JSON=$(gh pr view "${PR_NUMBER}" -R "${REPO}" \
             --json headRefName,headRefOid,headRepository)
@@ -507,26 +558,42 @@ jobs:
             --limit 200 \
             --json databaseId,name,headSha \
             --jq "[.[] | select(.headSha == \"${HEAD_SHA}\") | [.databaseId, .name]] | .[] | @tsv")
+          LABEL_RETESTS=""
 
-          while IFS=$'\t' read -r OPTIONAL_WORKFLOW _command; do
+          while IFS=$'\t' read -r OPTIONAL_WORKFLOW _command OPTIONAL_TRIGGER OPTIONAL_LABEL; do
             [ -z "${OPTIONAL_WORKFLOW}" ] && continue
             MARKER="PR #${PR_NUMBER} @ ${HEAD_SHA}"
-            OPTIONAL_RUNS=$(gh run list \
-              -R "${REPO}" \
-              --workflow "${OPTIONAL_WORKFLOW}" \
-              --status failure \
-              --limit 200 \
-              --json databaseId,name,event,displayTitle \
-              --jq "[.[] | select(.event == \"workflow_dispatch\" and ((.displayTitle // \"\") | contains(\"${MARKER}\"))) | [.databaseId, .name]] | .[] | @tsv")
-            if [ -n "${OPTIONAL_RUNS}" ]; then
-              if [ -n "${FAILED_RUNS}" ]; then
-                FAILED_RUNS+=$'\n'
+            if [[ "${OPTIONAL_TRIGGER}" == "label" ]]; then
+              OPTIONAL_RUNS=$(gh run list \
+                -R "${REPO}" \
+                --workflow "${OPTIONAL_WORKFLOW}" \
+                --status failure \
+                --limit 200 \
+                --json databaseId,name,event,displayTitle \
+                --jq "[.[] | select(.event == \"pull_request_target\" and ((.displayTitle // \"\") | contains(\"${MARKER}\"))) | [.databaseId, .name]] | .[] | @tsv")
+              if [[ -n "${OPTIONAL_RUNS}" ]]; then
+                LABEL_RETESTS="${LABEL_RETESTS}${LABEL_RETESTS:+$'\n'}${OPTIONAL_LABEL}"
               fi
-              FAILED_RUNS+="${OPTIONAL_RUNS}"
+            else
+              OPTIONAL_RUNS=$(gh run list \
+                -R "${REPO}" \
+                --workflow "${OPTIONAL_WORKFLOW}" \
+                --status failure \
+                --limit 200 \
+                --json databaseId,name,event,displayTitle \
+                --jq "[.[] | select(.event == \"workflow_dispatch\" and ((.displayTitle // \"\") | contains(\"${MARKER}\"))) | [.databaseId, .name]] | .[] | @tsv")
             fi
-          done < <(jq -r '.[] | select(.retestable == true) | [.workflow, .command] | @tsv' /tmp/optional.json)
+            if [ -n "${OPTIONAL_RUNS}" ]; then
+              if [[ "${OPTIONAL_TRIGGER}" == "workflow_dispatch" ]]; then
+                if [ -n "${FAILED_RUNS}" ]; then
+                  FAILED_RUNS+=$'\n'
+                fi
+                FAILED_RUNS+="${OPTIONAL_RUNS}"
+              fi
+            fi
+          done < <(jq -r '.[] | select(.retestable == true) | [.workflow, .command, (.trigger // "workflow_dispatch"), (.label // "")] | @tsv' /tmp/optional.json)
 
-          if [ -z "${FAILED_RUNS}" ]; then
+          if [ -z "${FAILED_RUNS}" ] && [ -z "${LABEL_RETESTS}" ]; then
             gh pr comment "${PR_NUMBER}" -R "${REPO}" \
               --body "No failed workflow runs found for this PR at commit \`${HEAD_SHA:0:7}\`."
             exit 0
@@ -536,6 +603,7 @@ jobs:
           RERUN_ERRORS=""
 
           while IFS=$'\t' read -r RUN_ID RUN_NAME; do
+            [ -z "${RUN_ID}" ] && continue
             if gh run rerun "${RUN_ID}" -R "${REPO}"; then
               RERUN_LIST="${RERUN_LIST:+${RERUN_LIST}
           }- ${RUN_NAME} (#${RUN_ID})"
@@ -544,6 +612,42 @@ jobs:
           }- ${RUN_NAME} (#${RUN_ID})"
             fi
           done <<< "${FAILED_RUNS}"
+
+          ensure_trigger_label() {
+            local label="$1"
+            if [[ -z "${TRIGGER_GH_TOKEN}" ]]; then
+              echo "Missing MERGE_QUEUE_TOKEN for label-triggered retest: ${label}" >&2
+              return 1
+            fi
+            if ! GH_TOKEN="${TRIGGER_GH_TOKEN}" gh label list "${label}" \
+              -R "${REPO}" --limit 1 --json name --jq '.[].name' | grep -Fxq "${label}"; then
+              GH_TOKEN="${TRIGGER_GH_TOKEN}" gh label create "${label}" \
+                -R "${REPO}" --color 1D76DB --description "Manual optional E2E trigger"
+            fi
+          }
+
+          retrigger_label() {
+            local label="$1"
+            ensure_trigger_label "${label}" || return 1
+            if GH_TOKEN="${TRIGGER_GH_TOKEN}" gh pr view "${PR_NUMBER}" -R "${REPO}" \
+              --json labels --jq '.labels[].name' 2>/dev/null | grep -Fxq "${label}"; then
+              GH_TOKEN="${TRIGGER_GH_TOKEN}" gh pr edit "${PR_NUMBER}" -R "${REPO}" \
+                --remove-label "${label}"
+            fi
+            GH_TOKEN="${TRIGGER_GH_TOKEN}" gh pr edit "${PR_NUMBER}" -R "${REPO}" \
+              --add-label "${label}"
+          }
+
+          while IFS= read -r LABEL; do
+            [ -z "${LABEL}" ] && continue
+            if retrigger_label "${LABEL}"; then
+              RERUN_LIST="${RERUN_LIST:+${RERUN_LIST}
+          }- label-triggered workflow (${LABEL})"
+            else
+              RERUN_ERRORS="${RERUN_ERRORS:+${RERUN_ERRORS}
+          }- label-triggered workflow (${LABEL})"
+            fi
+          done <<< "${LABEL_RETESTS}"
 
           BODY="Re-triggered failed runs:"
           if [ -n "${RERUN_LIST}" ]; then
