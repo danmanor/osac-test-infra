@@ -4,6 +4,7 @@ run-name: "E2E BMaaS Netris Full Install${{ inputs.pr-number != '' && format(' /
 
 permissions:
   contents: read
+  checks: write
   pull-requests: read
 
 on:
@@ -76,10 +77,106 @@ on:
         default: ""
 
 concurrency:
-  group: e2e-bmaas-netris-full-install-${{ inputs.pr-repository || github.repository }}-${{ inputs.pr-number || github.run_id }}-${{ inputs.pr-sha || github.sha }}
-  cancel-in-progress: false
+  # PR dispatches for a new commit must cancel an older run for the same PR.
+  # Non-PR scheduled/manual runs keep independent groups.
+  group: e2e-bmaas-netris-full-install-${{ inputs.pr-repository || github.repository }}-${{ inputs.pr-number || github.run_id }}
+  cancel-in-progress: ${{ inputs.pr-number != '' }}
 
 jobs:
+  e2e-bmaas-netris-check-start:
+    if: inputs.pr-number != '' && inputs.pr-sha != ''
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Create or reset PR check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          PR_SHA: ${{ inputs.pr-sha }}
+          CHECK_NAME: E2E BMaaS Netris
+          DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          external_id="e2e-bmaas-netris:${BASE_REPO}:${PR_NUMBER}:${PR_SHA}"
+          summary="Optional BMaaS Netris E2E is running for PR #${PR_NUMBER}."
+          external_id_prefix="e2e-bmaas-netris:${BASE_REPO}:${PR_NUMBER}:"
+          commit_shas=$(gh api "repos/${BASE_REPO}/pulls/${PR_NUMBER}/commits?per_page=100" --paginate --jq '.[].sha') || {
+            echo "::warning::Could not list PR commits; continuing without stale-check cleanup."
+            commit_shas=""
+          }
+          while IFS= read -r commit_sha; do
+            [[ -z "${commit_sha}" ]] && continue
+            commit_checks=$(gh api "repos/${BASE_REPO}/commits/${commit_sha}/check-runs?per_page=100") || {
+              echo "::warning::Could not read checks for commit ${commit_sha}; continuing."
+              continue
+            }
+            stale_checks=$(jq -r --arg prefix "${external_id_prefix}" '
+              [.check_runs[]
+                | select(.status != "completed")
+                | select((.external_id // "") | startswith($prefix))
+                | [.id, .external_id]]
+              | .[] | @tsv
+            ' <<<"${commit_checks}")
+            while IFS=$'\t' read -r stale_check_id stale_external_id; do
+              [[ -z "${stale_check_id}" ]] && continue
+              cancel_payload=$(jq -n \
+                --arg name "${CHECK_NAME}" \
+                --arg external_id "${stale_external_id}" \
+                --arg details "${DETAILS_URL}" \
+                --arg completed "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{
+                  name: $name,
+                  external_id: $external_id,
+                  status: "completed",
+                  conclusion: "cancelled",
+                  completed_at: $completed,
+                  details_url: $details,
+                  output: {
+                    title: "BMaaS Netris E2E superseded",
+                    summary: "A newer PR commit started a replacement BMaaS Netris E2E run."
+                  }
+                }')
+              gh api "repos/${BASE_REPO}/check-runs/${stale_check_id}" --method PATCH --input - <<<"${cancel_payload}" >/dev/null || \
+                echo "::warning::Could not cancel stale PR check ${stale_check_id}."
+            done <<<"${stale_checks}"
+          done <<<"${commit_shas}"
+          existing_json=$(gh api "repos/${BASE_REPO}/commits/${PR_SHA}/check-runs?per_page=100") || {
+            echo "::warning::Could not read existing PR check; continuing without check publication."
+            exit 0
+          }
+          check_id=$(jq -r --arg external_id "${external_id}" \
+            '[.check_runs[] | select(.external_id == $external_id) | .id] | first // empty' \
+            <<<"${existing_json}")
+          payload=$(jq -n \
+            --arg name "${CHECK_NAME}" \
+            --arg sha "${PR_SHA}" \
+            --arg external_id "${external_id}" \
+            --arg details "${DETAILS_URL}" \
+            --arg summary "${summary}" \
+            --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              name: $name,
+              head_sha: $sha,
+              external_id: $external_id,
+              status: "in_progress",
+              details_url: $details,
+              started_at: $started,
+              output: {
+                title: "BMaaS Netris E2E running",
+                summary: $summary
+              }
+            }')
+          if [[ -n "${check_id}" ]]; then
+            update_payload=$(jq 'del(.head_sha)' <<<"${payload}")
+            gh api "repos/${BASE_REPO}/check-runs/${check_id}" --method PATCH --input - <<<"${update_payload}" >/dev/null
+          else
+            gh api "repos/${BASE_REPO}/check-runs" --method POST --input - <<<"${payload}" >/dev/null
+          fi
+
   e2e-bmaas-netris:
     uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
     with:
@@ -101,3 +198,64 @@ jobs:
       fork-pr-author-association: ${{ inputs.fork-pr-author-association || '' }}
       fork-pr-author: ${{ inputs.fork-pr-author || '' }}
       pr-number: ${{ inputs.pr-number || '' }}
+
+  e2e-bmaas-netris-check-finish:
+    if: always() && inputs.pr-number != '' && inputs.pr-sha != ''
+    needs: [e2e-bmaas-netris, e2e-bmaas-netris-check-start]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Complete PR check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          PR_SHA: ${{ inputs.pr-sha }}
+          CHECK_NAME: E2E BMaaS Netris
+          DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TEST_RESULT: ${{ needs.e2e-bmaas-netris.result }}
+        run: |
+          set -euo pipefail
+          case "${TEST_RESULT}" in
+            success) conclusion=success; title="BMaaS Netris E2E passed" ;;
+            cancelled) conclusion=cancelled; title="BMaaS Netris E2E cancelled" ;;
+            skipped) conclusion=neutral; title="BMaaS Netris E2E skipped" ;;
+            *) conclusion=failure; title="BMaaS Netris E2E failed" ;;
+          esac
+          external_id="e2e-bmaas-netris:${BASE_REPO}:${PR_NUMBER}:${PR_SHA}"
+          existing_json=$(gh api "repos/${BASE_REPO}/commits/${PR_SHA}/check-runs?per_page=100") || {
+            echo "::warning::Could not read the PR check; continuing without check completion."
+            exit 0
+          }
+          check_id=$(jq -r --arg external_id "${external_id}" \
+            '[.check_runs[] | select(.external_id == $external_id) | .id] | first // empty' \
+            <<<"${existing_json}")
+          if [[ -z "${check_id}" ]]; then
+            echo "::warning::PR check was not created; continuing without check completion."
+            exit 0
+          fi
+          summary="Optional BMaaS Netris E2E finished with result: ${TEST_RESULT}."
+          payload=$(jq -n \
+            --arg name "${CHECK_NAME}" \
+            --arg external_id "${external_id}" \
+            --arg details "${DETAILS_URL}" \
+            --arg title "${title}" \
+            --arg summary "${summary}" \
+            --arg conclusion "${conclusion}" \
+            --arg completed "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              name: $name,
+              external_id: $external_id,
+              status: "completed",
+              conclusion: $conclusion,
+              completed_at: $completed,
+              details_url: $details,
+              output: {
+                title: $title,
+                summary: $summary
+              }
+            }')
+          gh api "repos/${BASE_REPO}/check-runs/${check_id}" --method PATCH --input - >/dev/null <<<"${payload}"
