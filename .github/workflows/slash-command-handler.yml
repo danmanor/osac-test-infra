@@ -436,7 +436,7 @@ jobs:
                   -f content='confused' --silent 2>/dev/null || true
                 exit 1
               fi
-              if ! GH_TOKEN="${TRIGGER_GH_TOKEN}" gh label list "${OPTIONAL_LABEL}" \
+              if ! GH_TOKEN="${TRIGGER_GH_TOKEN}" gh label list --search "${OPTIONAL_LABEL}" \
                 -R "${REPO}" --limit 1 --json name --jq '.[].name' | grep -Fxq "${OPTIONAL_LABEL}"; then
                 GH_TOKEN="${TRIGGER_GH_TOKEN}" gh label create "${OPTIONAL_LABEL}" \
                   -R "${REPO}" --color 1D76DB --description "Manual optional BMaaS Netris E2E trigger"
@@ -619,7 +619,7 @@ jobs:
               echo "Missing MERGE_QUEUE_TOKEN for label-triggered retest: ${label}" >&2
               return 1
             fi
-            if ! GH_TOKEN="${TRIGGER_GH_TOKEN}" gh label list "${label}" \
+            if ! GH_TOKEN="${TRIGGER_GH_TOKEN}" gh label list --search "${label}" \
               -R "${REPO}" --limit 1 --json name --jq '.[].name' | grep -Fxq "${label}"; then
               GH_TOKEN="${TRIGGER_GH_TOKEN}" gh label create "${label}" \
                 -R "${REPO}" --color 1D76DB --description "Manual optional E2E trigger"
