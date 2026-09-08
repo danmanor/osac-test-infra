@@ -43,6 +43,7 @@ func netrisControllerCfg(conf *config.Config) NetrisController {
 	if ctlCfg.Pass == "" {
 		ctlCfg.Pass = "newNet0ps"
 	}
+	ctlCfg.BackendVersion = conf.Get("controller_backend_version")
 	ctlCfg.Insecure = conf.GetBool("controller_insecure")
 	if !ctlCfg.Insecure {
 		ctlCfg.Insecure = true
@@ -91,6 +92,9 @@ func main() {
 			conf.GetObject("bgp_subnets_to_advertise", &bgpSubnetsToAdvertise)
 			serversGW = conf.Get("servers_gw")
 			ctlCfg := netrisControllerCfg(conf)
+			if ctlCfg.BackendVersion == "" {
+				return fmt.Errorf("controller_backend_version must be configured")
+			}
 			aptRepo := conf.Get("apt_repo")
 			if aptRepo == "" {
 				aptRepo = "main"
@@ -937,6 +941,15 @@ func createVM(ctx *pulumi.Context, provider *libvirt.Provider, name string, hype
 
 }
 
+func controllerInfo(ctlCfg NetrisController, authKey string, aptRepo string) NetrisControllerInfo {
+	return NetrisControllerInfo{
+		Version: ctlCfg.BackendVersion,
+		AuthKey: authKey,
+		URL:     ctlCfg.URL,
+		AptRepo: aptRepo,
+	}
+}
+
 func getFromNetris(ctx *pulumi.Context, ctlCfg NetrisController, serversGW string, aptRepo string) (*NetrisInfo, error) {
 	// Netris Client
 	nclient, err := napi.Client(ctlCfg.URL, ctlCfg.Login, ctlCfg.Pass, 60)
@@ -1117,11 +1130,6 @@ func getFromNetris(ctx *pulumi.Context, ctlCfg NetrisController, serversGW strin
 		filteredSubnets = append(filteredSubnets, mgmtSubnetForServers)
 	}
 
-	ctlVersion, err := nclient.Version().Get()
-	if err != nil {
-		return nil, err
-	}
-
 	ctlGlobalSettings, err := nclient.GlobalSettings().Get()
 	if err != nil {
 		return nil, err
@@ -1137,19 +1145,14 @@ func getFromNetris(ctx *pulumi.Context, ctlCfg NetrisController, serversGW strin
 	}
 
 	netrisInfo := &NetrisInfo{
-		Hardware:    devices,
-		Links:       switchPortsLinks,
-		BGPLinks:    bgpLinks,
-		PortIndexes: portIndexes,
-		SiteName:    ctlCfg.Site,
-		SiteObject:  *site,
-		MGMTSubnets: filteredSubnets,
-		ControllerInfo: NetrisControllerInfo{
-			Version: ctlVersion.BuildVersion,
-			AuthKey: ctlAuthKey,
-			URL:     ctlCfg.URL,
-			AptRepo: aptRepo,
-		},
+		Hardware:         devices,
+		Links:            switchPortsLinks,
+		BGPLinks:         bgpLinks,
+		PortIndexes:      portIndexes,
+		SiteName:         ctlCfg.Site,
+		SiteObject:       *site,
+		MGMTSubnets:      filteredSubnets,
+		ControllerInfo:   controllerInfo(ctlCfg, ctlAuthKey, aptRepo),
 		allPortsBySwName: allPortsBySwName,
 	}
 

@@ -19,3 +19,15 @@ func TestSortLinkMappingsByNumericLocalPort(t *testing.T) {
 		}
 	}
 }
+
+func TestControllerInfoUsesConfiguredBackendVersion(t *testing.T) {
+	info := controllerInfo(
+		NetrisController{BackendVersion: "4.16.0-008"},
+		"auth-key",
+		"main",
+	)
+
+	if info.Version != "4.16.0-008" {
+		t.Fatalf("expected configured backend version 4.16.0-008, got %q", info.Version)
+	}
+}

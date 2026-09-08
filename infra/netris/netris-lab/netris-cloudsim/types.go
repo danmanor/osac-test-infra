@@ -65,6 +65,7 @@ type NetrisController struct {
 	URL              string
 	Login            string
 	Pass             string
+	BackendVersion   string
 	Insecure         bool
 	Site             string
 	CreateEmptyPorts bool
