@@ -8,8 +8,8 @@ gpu_server_hostname: "hgx"
 site_name: "Datacenter-1"
 ew_fabric_enable: 0                     # 0 to disable East-West fabric (NS-only mode)
 
-# Test Netris default-deny behavior, including DHCP relay responses on softgates.
-acl_default_policy: "deny"
+# Keep Netris default-permit behavior so DHCP relay responses reach softgates.
+acl_default_policy: "permit"
 
 # --- Netris Controller ---
 netris_controller_chart_version: "2.8.1"
