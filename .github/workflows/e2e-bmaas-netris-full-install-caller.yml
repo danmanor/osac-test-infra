@@ -79,6 +79,7 @@ on:
         required: false
         default: ""
       # Validation marker only; no workflow behavior change.
+      # Trigger-only diff for live Netris validation.
       test-ref:
         description: "Git ref (branch/tag/SHA) of the osac mono-repo tests to run -- empty means main"
         required: false
