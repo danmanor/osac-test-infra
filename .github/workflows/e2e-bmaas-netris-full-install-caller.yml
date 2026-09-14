@@ -78,6 +78,7 @@ on:
         description: "Branch, tag, or commit of the osac mono-repo to clone -- empty means main"
         required: false
         default: ""
+      # Validation marker only; no workflow behavior change.
       test-ref:
         description: "Git ref (branch/tag/SHA) of the osac mono-repo tests to run -- empty means main"
         required: false
