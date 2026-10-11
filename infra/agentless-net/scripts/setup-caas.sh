@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Create InfraEnv, boot host VMs, wait for agents to register, then approve and
-# label them. Corresponds to the CaaS discovery flow in setup-lab.sh.
+# Register host type, create InfraEnv, boot host VMs, wait for agents
+# to register, approve and label them.
+# Corresponds to setup-lab.sh steps 19-22.
 # Idempotent — safe to re-run.
 #
 set -euo pipefail
@@ -34,6 +35,29 @@ VM_MEMORY=16384
 VM_DISK_SIZE=100
 
 info() { echo "==> $*"; }
+
+# ---------- step 19: register host type ----------
+
+INTERNAL_API="https://$(KUBECONFIG="$KUBECONFIG" oc get route fulfillment-internal-api -n "$OSAC_NAMESPACE" -o jsonpath='{.status.ingress[0].host}')"
+TOKEN=$(KUBECONFIG="$KUBECONFIG" oc create token -n "$OSAC_NAMESPACE" admin)
+
+RESPONSE_BODY=$(mktemp)
+HTTP_CODE=$(curl -sk -w "%{http_code}" -X POST "${INTERNAL_API}/api/private/v1/host_types" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "{\"id\": \"${AGENT_RESOURCE_CLASS}\", \"title\": \"CI Worker\", \"description\": \"Worker nodes for CI testing\"}" \
+    -o "${RESPONSE_BODY}") || true
+if [[ "${HTTP_CODE}" == "200" || "${HTTP_CODE}" == "201" ]]; then
+    info "Host type '${AGENT_RESOURCE_CLASS}' created"
+elif [[ "${HTTP_CODE}" == "409" ]]; then
+    info "Host type '${AGENT_RESOURCE_CLASS}' already exists — skipping"
+else
+    echo "ERROR: Failed to create host type (HTTP ${HTTP_CODE})"
+    cat "${RESPONSE_BODY}"
+    rm -f "${RESPONSE_BODY}"
+    exit 1
+fi
+rm -f "${RESPONSE_BODY}"
 
 # ---------- step 20: create agent namespace and InfraEnv ----------
 

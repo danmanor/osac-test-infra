@@ -39,7 +39,7 @@ deploy-fabric:
 	$(SCRIPTS)/deploy-fabric.sh
 
 setup-caas:
-	@echo "=== Creating InfraEnv, booting VMs, approving and labeling agents ==="
+	@echo "=== Registering host type, creating InfraEnv, booting VMs, approving agents ==="
 	$(SCRIPTS)/setup-caas.sh
 
 test-e2e:
