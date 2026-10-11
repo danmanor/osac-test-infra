@@ -1,6 +1,6 @@
 # netris-test-infra
 
-OSAC test infrastructure that deploys and tests OpenShift Assisted Cluster on a simulated Netris Spectrum-X GPU cluster. Tests three service models: VMaaS, BMaaS (planned), CaaS, and MaaS.
+OSAC test infrastructure that deploys and tests OpenShift Assisted Cluster on a simulated Netris Spectrum-X GPU cluster. Tests VMaaS, BMaaS, CaaS, and MaaS service models.
 
 Uses [netris-lab](netris-lab/) as a git submodule for the underlying network infrastructure.
 
@@ -18,7 +18,7 @@ roles/                          # Ansible roles (each has tasks/main.yml)
   prep-refresh-osac/            # Clone mono-repo, patch values, rebuild CLI (snapshot refresh)
   patch-osac-refresh/           # Post-refresh: Netris/SSH + AAP project pin sync + CaC
   discover-caas/                # Boot discovery VMs with InfraEnv ISO
-  setup-caas/                   # Label agents, register host type
+  setup-caas/                   # Label agents and configure the Netris resource-class map
   create-caas/                  # Create CaaS/MaaS cluster via fulfillment API
   destroy-infra/                # Teardown netris-lab
   destroy-caas/                 # Teardown CaaS/MaaS (osac delete + agents/InfraEnv/VMs)
@@ -41,7 +41,7 @@ make deploy-infra           # Deploy netris-lab
 make deploy-ocp             # Configure Netris networking + restore OCP SNO from snapshot
 make deploy-osac            # Deploy OSAC (fresh Helm install or snapshot refresh based on OSAC_DEPLOY_MODE)
 make connectivity           # Re-run lab connectivity (VPN, BGP, softgate agents)
-make setup-caas             # CaaS setup: discover hosts, label agents, register host type
+make setup-caas             # CaaS setup: discover hosts, label agents, configure resource-class map
 make deploy-caas            # CaaS: create cluster
 make setup-maas             # MaaS setup (wrappers over setup-caas with MaaS overrides)
 make deploy-maas            # MaaS: create cluster (ocp_4_20_ai_maas + -p params)
@@ -52,7 +52,7 @@ make destroy-infra          # Teardown netris-lab
 make destroy-caas           # Teardown CaaS/MaaS cluster + discovery
 make force-destroy-caas     # destroy-caas + strip stuck leftovers / Netris orphans
 make destroy-maas           # destroy-caas with MaaS overrides
-make setup-bmaas            # BMaaS setup: sushy-tools, BMHs, host type, catalog items
+make setup-bmaas            # BMaaS setup: sushy-tools, BMHs, BareMetalInstanceType, catalog items
 make destroy-bmaas          # Teardown BMaaS (BMHs, sushy-tools, BMC network)
 make setup-bmc              # BMC network + sushy-tools only (subset of setup-bmaas)
 make destroy-setup          # Revert setup-infra (caches, bridges, tools)
@@ -76,7 +76,7 @@ make gather-infra           # Gather diagnostic info from the cluster
 **MaaS:** deploy or deploy-fast → setup-maas → deploy-maas
 (or `make redeploy-fresh SUITE=maas OSAC_DEPLOY_MODE=snapshot`)
 
-**VMaaS / BMaaS:** not yet implemented
+**VMaaS:** not yet implemented. BMaaS setup is implemented in `infra/netris/`.
 
 ## Ansible Configuration
 
@@ -96,7 +96,7 @@ All variables in `inventory/group_vars/all.yml`. Key sections:
 - **OSAC**: `osac_repo/branch`, `osac_namespace`, `osac_values_file`
 - **Component images**: `osac_operator_image`, `fulfillment_service_image` (empty = defaults)
 - **Snapshot**: `snapshot_flavor_image`, `snapshot_flavor_dir`, `snapshot_recert_image`, `snapshot_osac_namespace`, `snapshot_osac_values_file`
-- **CaaS / MaaS**: `caas_discovery_vm_patterns`, `caas_host_type_id`, `caas_cluster_name`, `caas_agents`, `caas_resource_class_hostnames` (empty = all agents); per-VM sizing via `caas_discovery_vcpu_overrides` / `caas_discovery_memory_mb_overrides`; MaaS Makefile `MAAS_*` (incl. `MAAS_DISCOVERY_MEMORY_MB_OVERRIDES`, default h01→16GiB)
+- **CaaS / MaaS**: `caas_discovery_vm_patterns`, `caas_host_type_id` (Netris resource-class key), `caas_cluster_name`, `caas_agents`, `caas_resource_class_hostnames` (empty = all agents); per-VM sizing via `caas_discovery_vcpu_overrides` / `caas_discovery_memory_mb_overrides`; MaaS Makefile `MAAS_*` (incl. `MAAS_DISCOVERY_MEMORY_MB_OVERRIDES`, default h01→16GiB)
 
 ## External Dependencies
 

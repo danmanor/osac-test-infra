@@ -41,12 +41,12 @@
   failed_when: false
   no_log: true
 
-- name: Gather fulfillment host types
+- name: Gather fulfillment BareMetalInstanceTypes
   ansible.builtin.shell: |
     curl -sfk -H "Authorization: Bearer ${GATHER_TOKEN}" \
-      "https://{{ _gather_fulfillment_host.stdout }}/api/private/v1/host_types" \
-      2>&1 | python3 -m json.tool > {{ _gather_dir }}/caas/fulfillment-api/host-types.json 2>&1 \
-      || echo "unavailable" > {{ _gather_dir }}/caas/fulfillment-api/host-types.json
+      "https://{{ _gather_fulfillment_host.stdout }}/api/private/v1/bare_metal_instance_types" \
+      2>&1 | python3 -m json.tool > {{ _gather_dir }}/caas/fulfillment-api/bare-metal-instance-types.json 2>&1 \
+      || echo "unavailable" > {{ _gather_dir }}/caas/fulfillment-api/bare-metal-instance-types.json
   environment:
     GATHER_TOKEN: "{{ _gather_sa_token.stdout }}"
   changed_when: false

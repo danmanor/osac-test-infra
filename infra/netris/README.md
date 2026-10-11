@@ -79,7 +79,7 @@ make deploy
 make deploy-fast
 
 # Then run a test flow
-make setup-caas    # CaaS setup: discover hosts, label agents, register host type
+make setup-caas    # CaaS setup: discover hosts, label agents, configure resource-class map
 make deploy-caas   # CaaS: create cluster
 ```
 
@@ -102,9 +102,9 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 
 | Target | Description | Time |
 |--------|-------------|------|
-| `make setup-caas` | Discover hosts, label agents, register host type, configure osac CLI | ~30 min |
+| `make setup-caas` | Discover hosts, label agents, configure the Netris resource-class map and osac CLI | ~30 min |
 | `make deploy-caas` | Create CaaS cluster using `ocp_ci_small` template | ~60 min |
-| `make setup-maas` | Same as setup-caas with MaaS host type / sizing; labels only `MAAS_LABEL_HOSTNAMES` (default h02+h03) with `g5` | ~30 min |
+| `make setup-maas` | Same as setup-caas with MaaS resource-class / sizing; labels only `MAAS_LABEL_HOSTNAMES` (default h02+h03) with `g5` | ~30 min |
 | `make deploy-maas` | Create MaaS cluster (`ocp_4_20_ai_maas` + `-p` template params) | ~60 min |
 
 ### Destroy
@@ -117,7 +117,7 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | `make destroy-infra` | Tear down netris-lab (VMs, K3s, topology) |
 | `make destroy-caas` | CaaS teardown: stop discovery VMs, remove disks/ISO, delete namespace, clean DNS |
 | `make force-destroy-caas` | destroy-caas + strip stuck orders/namespaces, wipe VMs, Netris orphans |
-| `make destroy-maas` | destroy-caas with MaaS cluster/host-type overrides |
+| `make destroy-maas` | destroy-caas with MaaS cluster/resource-class overrides |
 | `make force-destroy-maas` | force-destroy-caas with MaaS overrides |
 | `make destroy-bmaas` | BMaaS teardown: remove BMH/K8s resources, stop BMaaS VMs, clean disks, delete BMH namespace |
 
@@ -185,7 +185,7 @@ make connectivity   # re-runs VPN, socat, ISP FRR, softgate agents
 
 **Deploy CaaS after OSAC is up:**
 ```bash
-make setup-caas     # discover hosts, label agents, register host type
+make setup-caas     # discover hosts, label agents, configure resource-class map
 make deploy-caas    # create cluster
 ```
 

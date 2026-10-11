@@ -171,7 +171,7 @@
   delay: 10
   changed_when: true
 
-# Step 3: Register host type in fulfillment service
+# Step 3: Configure Fulfillment access for catalog setup
 - name: Get fulfillment internal API URL
   ansible.builtin.shell:
     cmd: oc get route fulfillment-internal-api -n {{ snapshot_osac_namespace | default(osac_namespace) }} -o jsonpath='{.status.ingress[0].host}'
@@ -219,26 +219,9 @@
   retries: 10
   delay: 15
 
-- name: Create host type
-  no_log: true
-  ansible.builtin.uri:
-    url: "{{ caas_fulfillment_api }}/api/private/v1/host_types"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ _sa_token.stdout }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      metadata:
-        name: "{{ caas_host_type_id }}"
-      title: "{{ caas_host_type_title }}"
-      description: "{{ caas_host_type_description }}"
-    validate_certs: false
-    status_code: [200, 201, 409]
-
 # AAP netris.steps.cluster_infra looks up netris_resource_class_map[resourceClass]
 # from env NETRIS_RESOURCE_CLASS_MAP (cluster-fulfillment-ig). Install only seeds
-# the then-current caas_host_type_id (e.g. ci-worker); setup-maas needs g5 too.
+# the then-current class key (caas_host_type_id, e.g. ci-worker); setup-maas needs g5 too.
 # Append only when the key is missing — never overwrite an existing entry.
 - name: Read NETRIS_RESOURCE_CLASS_MAP from cluster-fulfillment-ig
   ansible.builtin.shell:
@@ -252,7 +235,7 @@
   changed_when: false
   failed_when: false
 
-- name: Ensure host type is present in NETRIS_RESOURCE_CLASS_MAP
+- name: Ensure resource class is present in NETRIS_RESOURCE_CLASS_MAP
   ansible.builtin.shell: |
     set -euo pipefail
     python3 <<'PY'
