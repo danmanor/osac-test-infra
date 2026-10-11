@@ -578,31 +578,10 @@ jobs:
         continue-on-error: true
         run: make gather-suite INFRA=netris SUITE=bmaas_networking
 
-      - name: Stage Netris artifacts for redacted collection
+      - name: Stage categorized infrastructure artifacts for redacted collection
         if: always()
         shell: bash
-        run: |
-          set -euo pipefail
-          staging_dir="${RUNNER_TEMP}/osac-artifacts"
-          cleanup_stage() {
-            rm -rf -- "${staging_dir}/reports" "${staging_dir}/netris-logs"
-          }
-          trap cleanup_stage ERR
-          mkdir -p "${staging_dir}"
-          [[ -d reports ]] && cp -a reports "${staging_dir}/reports"
-          [[ -d infra/netris/logs ]] && cp -a infra/netris/logs "${staging_dir}/netris-logs"
-          if [[ -d "${staging_dir}/netris-logs" ]]; then
-            find "${staging_dir}/netris-logs" -type d \( -name must-gather -o -name inspect \) \
-              -prune -print -exec rm -rf -- {} +
-            remaining=$(find "${staging_dir}/netris-logs" -type d \( -name must-gather -o -name inspect \) -print -quit)
-            if [[ -n "${remaining}" ]]; then
-              echo "::error::Refusing to stage raw must-gather/inspect diagnostics: ${remaining}"
-              cleanup_stage
-              exit 1
-            fi
-          fi
-          trap - ERR
-
+        run: .github/scripts/stage-netris-artifacts.sh
       - name: Select kubeconfig for artifact collection
         id: artifact-kubeconfig
         if: always()
@@ -617,8 +596,8 @@ jobs:
             placeholder="${RUNNER_TEMP}/netris-empty-kubeconfig"
             : > "$placeholder"
             echo "path=${placeholder}" >> "$GITHUB_OUTPUT"
-            mkdir -p "${RUNNER_TEMP}/osac-artifacts"
-            cat > "${RUNNER_TEMP}/osac-artifacts/cluster-collection-status.txt" <<'EOF'
+            mkdir -p "$RUNNER_TEMP/osac-artifacts/mgmt-cluster"
+            cat > "$RUNNER_TEMP/osac-artifacts/mgmt-cluster/cluster-collection-status.txt" <<'EOF'
           status=skipped
           reason=management kubeconfig was not created
           staged_lab_diagnostics=will be redacted and uploaded

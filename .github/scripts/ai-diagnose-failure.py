@@ -192,24 +192,27 @@ OSAC_CONTEXT = """OSAC (Open Sovereign AI Cloud) provisions OpenShift clusters
 components, and where their evidence lands in this run's gathered artifact:
 
 - fulfillment-service: gRPC/REST API + PostgreSQL, the entry point for
-  provisioning requests. Its CR state is in the top-level
-  clusterorders.json / computeinstances.yaml.
+  provisioning requests. Its CR state is under
+  mgmt-cluster/clusterorders.json / mgmt-cluster/computeinstances.yaml.
 - osac-operator: Kubernetes controllers reconciling those CRs and driving
-  the provisioning lifecycle. Pod logs are under osac-operators/ -- often
+  the provisioning lifecycle. Pod logs are under
+  mgmt-cluster/namespaces/osac-operators/ -- often
   the first place a Go panic or reconcile error shows up.
 - osac-aap: Ansible playbooks doing the real infrastructure work (cluster
   install, networking, storage) via Ansible Automation Platform. Job
-  stdout is under aap-jobs/job-<id>-<status>-<name>.txt -- a
-  failed/error status there is usually the actual root cause of a
-  provisioning failure, not just a symptom.
+  stdout is under mgmt-cluster/aap-jobs/job-<id>-<status>-<name>.txt
+  (older artifacts may use aap-jobs/ at the root) -- a failed/error
+  status there is usually the actual root cause of a provisioning
+  failure, not just a symptom.
 - bare-metal-fulfillment-operator: bare-metal host pool provisioning
-  (BMaaS).
+  (BMaaS); host/API diagnostics are under mgmt-cluster/bmaas/.
 - osac-csi-driver: CSI storage tier routing; LVM/CSI diagnostics are
-  under storage/.
+  under mgmt-cluster/storage/.
 - KubeVirt VMs (VMaaS, and CaaS's hosted-control-plane node VMs):
-  diagnostics under cnv/ (VirtualMachines, DataVolumes, PVCs, VM pod logs).
-- keycloak/: auth; olm/ and marketplace/: operator install/subscription
-  issues; mco/: MachineConfig/node issues.
+  diagnostics under mgmt-cluster/cnv/ (VirtualMachines, DataVolumes, PVCs, VM pod logs).
+- mgmt-cluster/namespaces/keycloak/: auth; mgmt-cluster/olm/:
+  operator install/subscription issues; mgmt-cluster/mco/:
+  MachineConfig/node issues.
 
 CaaS provisions full OpenShift clusters, BMaaS provisions bare-metal hosts,
 VMaaS provisions VMs directly -- so which of these ran tells you which
@@ -293,9 +296,9 @@ def extract_junit_failures(path):
 
 NOISE_PATTERN = re.compile(r"\b(failed|unreachable)=0\b", re.IGNORECASE)
 MAX_FAILURE_SUMMARY_CHARS = 20000
-# aap-jobs/ file names: job-<id>-<status>-<task-name>_.txt (trailing
-# underscore before .txt is how gather-osac-logs.sh names them).
-AAP_JOB_FILENAME = re.compile(r"aap-jobs/job-(\d+)-(\w+)-(.+?)_\.txt")
+# Current AAP paths are mgmt-cluster/aap-jobs/; older artifacts used
+# aap-jobs/ at root. Names are job-<id>-<status>-<task-name>_.txt.
+AAP_JOB_FILENAME = re.compile(r"(?:mgmt-cluster/)?aap-jobs/job-(\d+)-(\w+)-(.+?)_\.txt")
 
 
 def _annotate_retried_aap_failures(text, artifact_dir):
@@ -313,24 +316,26 @@ def _annotate_retried_aap_failures(text, artifact_dir):
     fixate on it as if it were, rather than the real story the JUnit
     section (correctly) already tells.
     """
-    aap_dir = os.path.join(artifact_dir, "aap-jobs")
-    if not os.path.isdir(aap_dir):
-        return text
-
+    aap_dirs = (
+        os.path.join(artifact_dir, "mgmt-cluster", "aap-jobs"),
+        os.path.join(artifact_dir, "aap-jobs"),
+    )
     jobs_by_task = {}
-    try:
-        job_filenames = os.listdir(aap_dir)
-    except OSError:
-        # Directory vanished or became unreadable between the isdir check
-        # above and here -- skip annotation, not the whole diagnosis; the
-        # un-annotated summary/matches text is still returned as-is.
-        return text
-    for fname in job_filenames:
-        m = re.match(r"job-(\d+)-(\w+)-(.+?)_\.txt$", fname)
-        if not m:
+    for aap_dir in aap_dirs:
+        if not os.path.isdir(aap_dir):
             continue
-        job_id, status, task = int(m.group(1)), m.group(2), m.group(3)
-        jobs_by_task.setdefault(task, []).append((job_id, status))
+        try:
+            job_filenames = os.listdir(aap_dir)
+        except OSError:
+            # A directory vanished or became unreadable -- skip annotation,
+            # not the whole diagnosis.
+            continue
+        for fname in job_filenames:
+            m = re.match(r"job-(\d+)-(\w+)-(.+?)_\.txt$", fname)
+            if not m:
+                continue
+            job_id, status, task = int(m.group(1)), m.group(2), m.group(3)
+            jobs_by_task.setdefault(task, []).append((job_id, status))
 
     def annotate(m):
         job_id, status, task = int(m.group(1)), m.group(2), m.group(3)
@@ -352,9 +357,10 @@ def extract_log_signal(artifact_dir):
     # -A3 context lines (the fallback below only ever keeps single lines),
     # and excludes benign `failed=0`/`unreachable=0` Ansible recap noise
     # that the fallback's own pattern does not. Confirmed against a real
-    # ~60MB/346-file artifact where the fallback's MAX_LOG_MATCHES cap was
-    # entirely consumed within aap-jobs/ (alphabetically first) padded with
-    # such false positives, never reaching any other directory at all.
+    # ~60MB/346-file artifact where benign AAP retry lines exhausted the
+    # fallback's MAX_LOG_MATCHES cap before it reached other component logs.
+    # Current AAP output is under mgmt-cluster/aap-jobs/; older artifacts
+    # placed it at the root.
     summary_path = os.path.join(artifact_dir, "failure-summary.txt")
     if os.path.isfile(summary_path):
         try:
@@ -376,11 +382,10 @@ def extract_log_signal(artifact_dir):
 
     # Fallback for artifacts without failure-summary.txt (an older
     # gather-osac-logs.sh, or the file missing for some other reason).
-    # Recursive: gather-osac-logs.sh nests most of its output under
-    # subdirectories (aap-jobs/, osac-operators/, cnv/, keycloak/, storage/,
-    # olm/, marketplace/, mco/, cert-manager/, ...) -- only e2e.log,
-    # junit.xml, and the main E2E-namespace pod/event dumps land at the top
-    # level. Label with the path relative to artifact_dir (not just
+    # Recursive: gather-osac-logs.sh nests cluster output under
+    # mgmt-cluster/ (aap-jobs/, namespaces/, cnv/, storage/, olm/, mco/,
+    # ...); only e2e.log, junit.xml, and failure-summary.txt stay at the
+    # artifact root. Label with the path relative to artifact_dir (not just
     # basename) so the model can tell which component/namespace a line
     # came from. NOISE_PATTERN mirrors gather-osac-logs.sh's own filter so
     # this fallback doesn't burn its cap on `failed=0`/`unreachable=0`
@@ -613,7 +618,7 @@ def make_read_artifact_file_tool(artifact_dir):
 
         Args:
             path: Path relative to the artifact root, e.g.
-                "aap-jobs/job-42-failed-x.txt" or "cnv/vms.txt".
+                "mgmt-cluster/aap-jobs/job-42-failed-x.txt" or "mgmt-cluster/cnv/vms.txt".
             offset: Byte offset to start reading from. 0 (default) reads
                 from the start. A NEGATIVE value reads the LAST |offset|
                 bytes instead -- e.g. offset=-8000 reads the final 8000
@@ -1939,8 +1944,8 @@ log locations that weren't given to you:
    OpenShift pod logs, `oc describe` output, and Kubernetes events that
    this run's log-gathering step collected from the target cluster (this
    is NOT the GitHub Actions job log itself). Each line is labeled with
-   its path relative to the artifact root, e.g. "[aap-jobs/job-42-failed-x.txt]"
-   or "[osac-operators/pod-osac-operator-abc.log]" -- use the component
+   its path relative to the artifact root, e.g. "[mgmt-cluster/aap-jobs/job-42-failed-x.txt]"
+   or "[mgmt-cluster/namespaces/osac-operators/pod-osac-operator-abc.log]" -- use the component
    mapping above to read those labels. If this section says no artifact
    directory was found, that only means no cluster evidence was collected
    for this run -- it is not proof of what went wrong or when; rely on the
@@ -1971,8 +1976,8 @@ log locations that weren't given to you:
    {MAX_TOOL_CALLS} calls) to read any file from this listing by its
    exact relative path if the extract above doesn't clearly connect to
    the JUnit failure -- e.g. if a compute-instance test failed, check
-   cnv/ for the VM's own state; if an operator-driven resource never
-   became ready, check osac-operators/ for that pod's log directly. Some
+   mgmt-cluster/cnv/ for the VM's own state; if an operator-driven resource never
+   became ready, check mgmt-cluster/namespaces/osac-operators/ for that pod's log directly. Some
    pod logs are large (hundreds of KB to a few MB) -- a single call only
    returns a bounded slice from wherever you start reading, so for a
    large file whose start doesn't show the failure, use the tool's
@@ -1988,8 +1993,9 @@ log locations that weren't given to you:
    it doesn't explain it. Pull the specific resource identifier out of
    the failure text (a UUID, CR name, VM name, etc.) and use
    read_artifact_file to search for that EXACT identifier across every
-   component log that could plausibly have touched it (osac-operators/,
-   the fulfillment-service controller log, aap-jobs/, cnv/) to
+   component log that could plausibly have touched it (mgmt-cluster/namespaces/osac-operators/,
+   the fulfillment-service controller log, mgmt-cluster/aap-jobs/,
+   mgmt-cluster/cnv/) to
    reconstruct what actually happened to that specific resource during
    the timeout window, correlated by timestamp. The answer is sometimes
    "a component genuinely got stuck" -- but it can just as validly turn
@@ -2058,7 +2064,7 @@ sequence from the evidence; don't just restate the final symptom.
 For each claim above, quote the SPECIFIC log line(s) that support it,
 each labeled with its exact source path, formatted like this:
 
-`aap-jobs/job-17-failed-osac-create-tenant-cluster-storage_.txt`:
+the legacy path `aap-jobs/job-17-failed-osac-create-tenant-cluster-storage_.txt`:
 ```
 <the actual line, quoted verbatim -- not a paraphrase>
 ```

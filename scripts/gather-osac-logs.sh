@@ -15,6 +15,7 @@ set -o nounset
 set -o pipefail
 
 ARTIFACT_DIR="${1:-./osac-logs}"
+MGMT_CLUSTER_DIR="$ARTIFACT_DIR/mgmt-cluster"
 E2E_NAMESPACE="${E2E_NAMESPACE:-osac-e2e-ci}"
 JUNIT_PATH="${JUNIT_PATH:-}"
 
@@ -23,7 +24,7 @@ if [[ ! -f "${KUBECONFIG:-}" ]]; then
     exit 1
 fi
 
-mkdir -p "${ARTIFACT_DIR}"
+mkdir -p "$ARTIFACT_DIR" "$MGMT_CLUSTER_DIR"
 
 # ── Collect ──────────────────────────────────────────────────────────
 
@@ -32,6 +33,11 @@ echo "Gathering OSAC logs from namespace ${E2E_NAMESPACE}..."
 collect_namespace_logs() {
     local ns="$1"
     local dir="$2"
+    local gathered_pod_logs="$MGMT_CLUSTER_DIR/namespaces/$ns/pods"
+    if [[ -d "$gathered_pod_logs" ]]; then
+        echo "Namespace $ns already has categorized pod diagnostics; skipping duplicate capture"
+        return 0
+    fi
     mkdir -p "${dir}"
     oc get pods -n "${ns}" -o wide > "${dir}/pods.txt" 2>&1 || true
     oc get events -n "${ns}" --sort-by=.lastTimestamp > "${dir}/events.txt" 2>&1 || true
@@ -51,105 +57,105 @@ collect_namespace_logs() {
     wait
 }
 
-collect_namespace_logs "${E2E_NAMESPACE}" "${ARTIFACT_DIR}"
+collect_namespace_logs "$E2E_NAMESPACE" "$MGMT_CLUSTER_DIR/namespaces/$E2E_NAMESPACE"
 
 for ns in keycloak ansible-aap; do
     if oc get namespace "${ns}" &>/dev/null; then
         echo "Gathering logs from namespace ${ns}..."
-        collect_namespace_logs "${ns}" "${ARTIFACT_DIR}/${ns}"
+        collect_namespace_logs "$ns" "$MGMT_CLUSTER_DIR/namespaces/$ns"
     fi
 done
 
 echo "Collecting CNV diagnostics..."
-mkdir -p "${ARTIFACT_DIR}/cnv"
-oc get hyperconverged -A -o yaml > "${ARTIFACT_DIR}/cnv/hyperconverged.yaml" 2>&1 || true
-oc get vms -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/cnv/vms.txt" 2>&1 || true
-oc get vmis -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/cnv/vmis.txt" 2>&1 || true
-oc get datavolumes -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/cnv/datavolumes.txt" 2>&1 || true
-oc get pvc -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/cnv/pvcs.txt" 2>&1 || true
-oc get events -n openshift-cnv --sort-by=.lastTimestamp > "${ARTIFACT_DIR}/cnv/events-openshift-cnv.txt" 2>&1 || true
+mkdir -p "$MGMT_CLUSTER_DIR/cnv"
+oc get hyperconverged -A -o yaml > "$MGMT_CLUSTER_DIR/cnv/hyperconverged.yaml" 2>&1 || true
+oc get vms -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/cnv/vms.txt" 2>&1 || true
+oc get vmis -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/cnv/vmis.txt" 2>&1 || true
+oc get datavolumes -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/cnv/datavolumes.txt" 2>&1 || true
+oc get pvc -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/cnv/pvcs.txt" 2>&1 || true
+oc get events -n openshift-cnv --sort-by=.lastTimestamp > "$MGMT_CLUSTER_DIR/cnv/events-openshift-cnv.txt" 2>&1 || true
 
 VM_NAMESPACES=$(oc get computeinstances -n "${E2E_NAMESPACE}" \
     -o jsonpath='{.items[*].status.virtualMachineReference.namespace}' 2>/dev/null | tr ' ' '\n' | sort -u)
 for ns in ${VM_NAMESPACES}; do
     [[ -z "${ns}" || "${ns}" == "${E2E_NAMESPACE}" ]] && continue
     echo "  Gathering VM diagnostics from subnet namespace ${ns}..."
-    mkdir -p "${ARTIFACT_DIR}/cnv/${ns}"
-    oc get vms -n "${ns}" -o wide > "${ARTIFACT_DIR}/cnv/${ns}/vms.txt" 2>&1 || true
-    oc get vms -n "${ns}" -o yaml > "${ARTIFACT_DIR}/cnv/${ns}/vms.yaml" 2>&1 || true
-    oc get vmis -n "${ns}" -o wide > "${ARTIFACT_DIR}/cnv/${ns}/vmis.txt" 2>&1 || true
-    oc get datavolumes -n "${ns}" -o wide > "${ARTIFACT_DIR}/cnv/${ns}/datavolumes.txt" 2>&1 || true
-    oc get datavolumes -n "${ns}" -o yaml > "${ARTIFACT_DIR}/cnv/${ns}/datavolumes.yaml" 2>&1 || true
-    oc get pvc -n "${ns}" -o wide > "${ARTIFACT_DIR}/cnv/${ns}/pvcs.txt" 2>&1 || true
-    oc get events -n "${ns}" --sort-by=.lastTimestamp > "${ARTIFACT_DIR}/cnv/${ns}/events.txt" 2>&1 || true
-    oc get networkpolicies -n "${ns}" -o yaml > "${ARTIFACT_DIR}/cnv/${ns}/networkpolicies.yaml" 2>&1 || true
-    oc get pods -n "${ns}" -o wide > "${ARTIFACT_DIR}/cnv/${ns}/pods.txt" 2>&1 || true
+    mkdir -p "$MGMT_CLUSTER_DIR/cnv/${ns}"
+    oc get vms -n "${ns}" -o wide > "$MGMT_CLUSTER_DIR/cnv/${ns}/vms.txt" 2>&1 || true
+    oc get vms -n "${ns}" -o yaml > "$MGMT_CLUSTER_DIR/cnv/${ns}/vms.yaml" 2>&1 || true
+    oc get vmis -n "${ns}" -o wide > "$MGMT_CLUSTER_DIR/cnv/${ns}/vmis.txt" 2>&1 || true
+    oc get datavolumes -n "${ns}" -o wide > "$MGMT_CLUSTER_DIR/cnv/${ns}/datavolumes.txt" 2>&1 || true
+    oc get datavolumes -n "${ns}" -o yaml > "$MGMT_CLUSTER_DIR/cnv/${ns}/datavolumes.yaml" 2>&1 || true
+    oc get pvc -n "${ns}" -o wide > "$MGMT_CLUSTER_DIR/cnv/${ns}/pvcs.txt" 2>&1 || true
+    oc get events -n "${ns}" --sort-by=.lastTimestamp > "$MGMT_CLUSTER_DIR/cnv/${ns}/events.txt" 2>&1 || true
+    oc get networkpolicies -n "${ns}" -o yaml > "$MGMT_CLUSTER_DIR/cnv/${ns}/networkpolicies.yaml" 2>&1 || true
+    oc get pods -n "${ns}" -o wide > "$MGMT_CLUSTER_DIR/cnv/${ns}/pods.txt" 2>&1 || true
     for pod in $(oc get pods -n "${ns}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-        oc logs "${pod}" -n "${ns}" --all-containers > "${ARTIFACT_DIR}/cnv/${ns}/pod-${pod}.log" 2>&1 || true
+        oc logs "${pod}" -n "${ns}" --all-containers > "$MGMT_CLUSTER_DIR/cnv/${ns}/pod-${pod}.log" 2>&1 || true
     done
 done
 
 echo "Collecting compute instance status..."
-oc get computeinstances -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/computeinstances.txt" 2>&1 || true
-oc get computeinstances -n "${E2E_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/computeinstances.yaml" 2>&1 || true
+oc get computeinstances -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/computeinstances.txt" 2>&1 || true
+oc get computeinstances -n "${E2E_NAMESPACE}" -o yaml > "$MGMT_CLUSTER_DIR/computeinstances.yaml" 2>&1 || true
 
 echo "Collecting cluster order status..."
-oc get clusterorders -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/clusterorders.txt" 2>&1 || true
-oc get clusterorders -n "${E2E_NAMESPACE}" -o json 2>"${ARTIFACT_DIR}/clusterorders-errors.txt" \
+oc get clusterorders -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/clusterorders.txt" 2>&1 || true
+oc get clusterorders -n "${E2E_NAMESPACE}" -o json 2>"$MGMT_CLUSTER_DIR/clusterorders-errors.txt" \
     | jq 'del(.items[]?.spec.templateParameters)' \
-    > "${ARTIFACT_DIR}/clusterorders.json" || true
+    > "$MGMT_CLUSTER_DIR/clusterorders.json" || true
 
 echo "Collecting agent status..."
 AGENT_NAMESPACE="${OSAC_AGENT_NAMESPACE:-hardware-inventory}"
 if oc get namespace "${AGENT_NAMESPACE}" &>/dev/null; then
-    oc get agents.agent-install.openshift.io -n "${AGENT_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/agents.txt" 2>&1 || true
-    oc get agents.agent-install.openshift.io -n "${AGENT_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/agents.yaml" 2>&1 || true
+    oc get agents.agent-install.openshift.io -n "${AGENT_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/agents.txt" 2>&1 || true
+    oc get agents.agent-install.openshift.io -n "${AGENT_NAMESPACE}" -o yaml > "$MGMT_CLUSTER_DIR/agents.yaml" 2>&1 || true
 else
     echo "  Agent namespace ${AGENT_NAMESPACE} not found, skipping agent collection"
 fi
 
 echo "Collecting networking status..."
-oc get virtualnetworks -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/virtualnetworks.txt" 2>&1 || true
-oc get virtualnetworks -n "${E2E_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/virtualnetworks.yaml" 2>&1 || true
-oc get subnets -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/subnets.txt" 2>&1 || true
-oc get subnets -n "${E2E_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/subnets.yaml" 2>&1 || true
-oc get securitygroups -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/securitygroups.txt" 2>&1 || true
-oc get clusteruserdefinednetwork -o yaml > "${ARTIFACT_DIR}/clusteruserdefinednetwork.yaml" 2>&1 || true
+oc get virtualnetworks -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/virtualnetworks.txt" 2>&1 || true
+oc get virtualnetworks -n "${E2E_NAMESPACE}" -o yaml > "$MGMT_CLUSTER_DIR/virtualnetworks.yaml" 2>&1 || true
+oc get subnets -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/subnets.txt" 2>&1 || true
+oc get subnets -n "${E2E_NAMESPACE}" -o yaml > "$MGMT_CLUSTER_DIR/subnets.yaml" 2>&1 || true
+oc get securitygroups -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/securitygroups.txt" 2>&1 || true
+oc get clusteruserdefinednetwork -o yaml > "$MGMT_CLUSTER_DIR/clusteruserdefinednetwork.yaml" 2>&1 || true
 
 echo "Collecting cert-manager status..."
-oc get certificates -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/certificates.txt" 2>&1 || true
-oc get certificates -n "${E2E_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/certificates.yaml" 2>&1 || true
-oc get routes -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/routes.txt" 2>&1 || true
-oc get routes -n keycloak -o wide > "${ARTIFACT_DIR}/routes-keycloak.txt" 2>&1 || true
+oc get certificates -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/certificates.txt" 2>&1 || true
+oc get certificates -n "${E2E_NAMESPACE}" -o yaml > "$MGMT_CLUSTER_DIR/certificates.yaml" 2>&1 || true
+oc get routes -n "${E2E_NAMESPACE}" -o wide > "$MGMT_CLUSTER_DIR/routes.txt" 2>&1 || true
+oc get routes -n keycloak -o wide > "$MGMT_CLUSTER_DIR/routes-keycloak.txt" 2>&1 || true
 
 for ns in cert-manager openshift-machine-api osac-operators; do
     if oc get namespace "${ns}" &>/dev/null; then
         echo "Gathering logs from namespace ${ns}..."
-        collect_namespace_logs "${ns}" "${ARTIFACT_DIR}/${ns}"
+        collect_namespace_logs "$ns" "$MGMT_CLUSTER_DIR/namespaces/$ns"
     fi
 done
 
 echo "Collecting OLM operator status..."
-mkdir -p "${ARTIFACT_DIR}/olm"
-oc get subscriptions -A -o yaml > "${ARTIFACT_DIR}/olm/subscriptions.yaml" 2>&1 || true
-oc get csv -A -o wide > "${ARTIFACT_DIR}/olm/csv.txt" 2>&1 || true
-oc get installplan -A -o wide > "${ARTIFACT_DIR}/olm/installplans.txt" 2>&1 || true
-oc get catalogsource -n openshift-marketplace -o yaml > "${ARTIFACT_DIR}/olm/catalogsources.yaml" 2>&1 || true
-oc get pods -n openshift-marketplace -o wide > "${ARTIFACT_DIR}/olm/marketplace-pods.txt" 2>&1 || true
+mkdir -p "$MGMT_CLUSTER_DIR/olm"
+oc get subscriptions -A -o yaml > "$MGMT_CLUSTER_DIR/olm/subscriptions.yaml" 2>&1 || true
+oc get csv -A -o wide > "$MGMT_CLUSTER_DIR/olm/csv.txt" 2>&1 || true
+oc get installplan -A -o wide > "$MGMT_CLUSTER_DIR/olm/installplans.txt" 2>&1 || true
+oc get catalogsource -n openshift-marketplace -o yaml > "$MGMT_CLUSTER_DIR/olm/catalogsources.yaml" 2>&1 || true
+oc get pods -n openshift-marketplace -o wide > "$MGMT_CLUSTER_DIR/olm/marketplace-pods.txt" 2>&1 || true
 
 echo "Collecting node resource usage..."
-oc adm top node > "${ARTIFACT_DIR}/node-resources.txt" 2>&1 || true
-oc adm top pod -n "${E2E_NAMESPACE}" --sort-by=memory > "${ARTIFACT_DIR}/pod-resources.txt" 2>&1 || true
-oc get nodes -o wide > "${ARTIFACT_DIR}/nodes.txt" 2>&1 || true
-oc describe node > "${ARTIFACT_DIR}/node-describe.txt" 2>&1 || true
+oc adm top node > "$MGMT_CLUSTER_DIR/node-resources.txt" 2>&1 || true
+oc adm top pod -n "${E2E_NAMESPACE}" --sort-by=memory > "$MGMT_CLUSTER_DIR/pod-resources.txt" 2>&1 || true
+oc get nodes -o wide > "$MGMT_CLUSTER_DIR/nodes.txt" 2>&1 || true
+oc describe node > "$MGMT_CLUSTER_DIR/node-describe.txt" 2>&1 || true
 
 echo "Collecting cluster operator status..."
-oc get co > "${ARTIFACT_DIR}/clusteroperators.txt" 2>&1 || true
-oc get csv -n openshift-cnv -o wide > "${ARTIFACT_DIR}/cnv/csv.txt" 2>&1 || true
+oc get co > "$MGMT_CLUSTER_DIR/clusteroperators.txt" 2>&1 || true
+oc get csv -n openshift-cnv -o wide > "$MGMT_CLUSTER_DIR/cnv/csv.txt" 2>&1 || true
 
 echo "Collecting software BOM..."
 # Everything below is already gathered elsewhere in this script in raw form
-# (olm/csv.txt, clusteroperators.txt, deployments.txt, ...) -- this distills
+# (mgmt-cluster/olm/csv.txt, mgmt-cluster/clusteroperators.txt, ...) -- this distills
 # just the "what did this run actually test against" facts (OCP version,
 # each Red Hat prerequisite operator's resolved CSV, and every workload
 # image actually running in the namespaces that matter) into one small,
@@ -294,57 +300,57 @@ collect_bom() {
             ocp: {version: ($ocpVersion | blank_to_null), channel: ($ocpChannel | blank_to_null)},
             operators: $operators,
             workloadImages: $workloadImages
-        }' > "${ARTIFACT_DIR}/bom.json"
+        }' > "$MGMT_CLUSTER_DIR/bom.json"
 }
 collect_bom
-echo "Software BOM written to ${ARTIFACT_DIR}/bom.json"
+echo "Software BOM written to $MGMT_CLUSTER_DIR/bom.json"
 
 echo "Collecting OLM marketplace diagnostics..."
-mkdir -p "${ARTIFACT_DIR}/marketplace"
-timeout 30s oc get catalogsource -n openshift-marketplace -o wide > "${ARTIFACT_DIR}/marketplace/catalogsources.txt" 2>&1 || true
-timeout 30s oc get catalogsource -n openshift-marketplace -o yaml > "${ARTIFACT_DIR}/marketplace/catalogsources.yaml" 2>&1 || true
-timeout 30s oc get pods -n openshift-marketplace -o wide > "${ARTIFACT_DIR}/marketplace/pods.txt" 2>&1 || true
-timeout 30s oc describe pods -n openshift-marketplace > "${ARTIFACT_DIR}/marketplace/pods-describe.txt" 2>&1 || true
-timeout 30s oc get events -n openshift-marketplace --sort-by=.lastTimestamp > "${ARTIFACT_DIR}/marketplace/events.txt" 2>&1 || true
-timeout 30s oc get subscriptions -A -o wide > "${ARTIFACT_DIR}/marketplace/subscriptions.txt" 2>&1 || true
-timeout 30s oc get installplans -A -o wide > "${ARTIFACT_DIR}/marketplace/installplans.txt" 2>&1 || true
-MARKETPLACE_PODS=$(timeout 30s oc get pods -n openshift-marketplace -o jsonpath='{.items[*].metadata.name}' 2>"${ARTIFACT_DIR}/marketplace/pod-discovery-errors.txt") || true
+mkdir -p "$MGMT_CLUSTER_DIR/olm/marketplace"
+timeout 30s oc get catalogsource -n openshift-marketplace -o wide > "$MGMT_CLUSTER_DIR/olm/marketplace/catalogsources.txt" 2>&1 || true
+timeout 30s oc get catalogsource -n openshift-marketplace -o yaml > "$MGMT_CLUSTER_DIR/olm/marketplace/catalogsources.yaml" 2>&1 || true
+timeout 30s oc get pods -n openshift-marketplace -o wide > "$MGMT_CLUSTER_DIR/olm/marketplace/pods.txt" 2>&1 || true
+timeout 30s oc describe pods -n openshift-marketplace > "$MGMT_CLUSTER_DIR/olm/marketplace/pods-describe.txt" 2>&1 || true
+timeout 30s oc get events -n openshift-marketplace --sort-by=.lastTimestamp > "$MGMT_CLUSTER_DIR/olm/marketplace/events.txt" 2>&1 || true
+timeout 30s oc get subscriptions -A -o wide > "$MGMT_CLUSTER_DIR/olm/marketplace/subscriptions.txt" 2>&1 || true
+timeout 30s oc get installplans -A -o wide > "$MGMT_CLUSTER_DIR/olm/marketplace/installplans.txt" 2>&1 || true
+MARKETPLACE_PODS=$(timeout 30s oc get pods -n openshift-marketplace -o jsonpath='{.items[*].metadata.name}' 2>"$MGMT_CLUSTER_DIR/olm/marketplace/pod-discovery-errors.txt") || true
 for pod in ${MARKETPLACE_PODS}; do
-    { timeout 60s oc logs "${pod}" -n openshift-marketplace --all-containers --tail=200 > "${ARTIFACT_DIR}/marketplace/pod-${pod}.log" 2>&1 || true; } &
+    { timeout 60s oc logs "${pod}" -n openshift-marketplace --all-containers --tail=200 > "$MGMT_CLUSTER_DIR/olm/marketplace/pod-${pod}.log" 2>&1 || true; } &
 done
 wait
 
 echo "Collecting storage diagnostics..."
-mkdir -p "${ARTIFACT_DIR}/storage"
-oc get pods -n openshift-storage -o wide > "${ARTIFACT_DIR}/storage/pods.txt" 2>&1 || true
-oc get events -n openshift-storage --sort-by=.lastTimestamp > "${ARTIFACT_DIR}/storage/events.txt" 2>&1 || true
-oc get lvmcluster -n openshift-storage -o yaml > "${ARTIFACT_DIR}/storage/lvmcluster.yaml" 2>&1 || true
-oc get lvmvolumegroups -n openshift-storage -o yaml > "${ARTIFACT_DIR}/storage/lvmvolumegroups.yaml" 2>&1 || true
-oc get sc -o wide > "${ARTIFACT_DIR}/storage/storageclasses.txt" 2>&1 || true
-oc get pv -o wide > "${ARTIFACT_DIR}/storage/pvs.txt" 2>&1 || true
-oc get pvc -A -o wide > "${ARTIFACT_DIR}/storage/pvcs-all.txt" 2>&1 || true
-oc get volumeattachments -o wide > "${ARTIFACT_DIR}/storage/volumeattachments.txt" 2>&1 || true
+mkdir -p "$MGMT_CLUSTER_DIR/storage"
+oc get pods -n openshift-storage -o wide > "$MGMT_CLUSTER_DIR/storage/pods.txt" 2>&1 || true
+oc get events -n openshift-storage --sort-by=.lastTimestamp > "$MGMT_CLUSTER_DIR/storage/events.txt" 2>&1 || true
+oc get lvmcluster -n openshift-storage -o yaml > "$MGMT_CLUSTER_DIR/storage/lvmcluster.yaml" 2>&1 || true
+oc get lvmvolumegroups -n openshift-storage -o yaml > "$MGMT_CLUSTER_DIR/storage/lvmvolumegroups.yaml" 2>&1 || true
+oc get sc -o wide > "$MGMT_CLUSTER_DIR/storage/storageclasses.txt" 2>&1 || true
+oc get pv -o wide > "$MGMT_CLUSTER_DIR/storage/pvs.txt" 2>&1 || true
+oc get pvc -A -o wide > "$MGMT_CLUSTER_DIR/storage/pvcs-all.txt" 2>&1 || true
+oc get volumeattachments -o wide > "$MGMT_CLUSTER_DIR/storage/volumeattachments.txt" 2>&1 || true
 for pod in $(oc get pods -n openshift-storage -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-    oc logs "${pod}" -n openshift-storage > "${ARTIFACT_DIR}/storage/pod-${pod}.log" 2>&1 || true
+    oc logs "${pod}" -n openshift-storage > "$MGMT_CLUSTER_DIR/storage/pod-${pod}.log" 2>&1 || true
 done
 
 echo "Collecting MachineConfig diagnostics..."
-mkdir -p "${ARTIFACT_DIR}/mco"
-oc get mcp -o wide > "${ARTIFACT_DIR}/mco/mcp.txt" 2>&1 || true
-oc get mc --sort-by=.metadata.creationTimestamp > "${ARTIFACT_DIR}/mco/mc.txt" 2>&1 || true
+mkdir -p "$MGMT_CLUSTER_DIR/mco"
+oc get mcp -o wide > "$MGMT_CLUSTER_DIR/mco/mcp.txt" 2>&1 || true
+oc get mc --sort-by=.metadata.creationTimestamp > "$MGMT_CLUSTER_DIR/mco/mc.txt" 2>&1 || true
 oc get secret pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' \
-    | base64 -d | jq -r '.auths | keys[]' > "${ARTIFACT_DIR}/mco/pull-secret-registries.txt" 2>&1 || true
+    | base64 -d | jq -r '.auths | keys[]' > "$MGMT_CLUSTER_DIR/mco/pull-secret-registries.txt" 2>&1 || true
 
 echo "Collecting service account and secret state..."
-oc get sa -n "${E2E_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/serviceaccounts.yaml" 2>&1 || true
-oc get secrets -n "${E2E_NAMESPACE}" -o custom-columns='NAME:.metadata.name,TYPE:.type' > "${ARTIFACT_DIR}/secrets-types.txt" 2>&1 || true
+oc get sa -n "${E2E_NAMESPACE}" -o yaml > "$MGMT_CLUSTER_DIR/serviceaccounts.yaml" 2>&1 || true
+oc get secrets -n "${E2E_NAMESPACE}" -o custom-columns='NAME:.metadata.name,TYPE:.type' > "$MGMT_CLUSTER_DIR/secrets-types.txt" 2>&1 || true
 
 echo "Collecting AAP operator status..."
-oc get ansibleautomationplatform -n "${E2E_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/aap-status.yaml" 2>&1 || true
-oc get automationcontroller -n "${E2E_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/automationcontroller-status.yaml" 2>&1 || true
+oc get ansibleautomationplatform -n "${E2E_NAMESPACE}" -o yaml > "$MGMT_CLUSTER_DIR/aap-status.yaml" 2>&1 || true
+oc get automationcontroller -n "${E2E_NAMESPACE}" -o yaml > "$MGMT_CLUSTER_DIR/automationcontroller-status.yaml" 2>&1 || true
 
 echo "Collecting AAP job stdout..."
-mkdir -p "${ARTIFACT_DIR}/aap-jobs"
+mkdir -p "$MGMT_CLUSTER_DIR/aap-jobs"
 AAP_ROUTE=$(oc get route osac-aap -n "${E2E_NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null) || true
 AAP_ADMIN_PW=$(oc get secret osac-aap-controller-admin-password -n "${E2E_NAMESPACE}" \
     -o jsonpath='{.data.password}' 2>/dev/null | base64 -d) || true
@@ -356,7 +362,7 @@ if [[ -n "${AAP_ROUTE}" && -n "${AAP_ADMIN_PW}" ]]; then
     MAX_PAGES=5
     page=1
     while [[ ${page} -le ${MAX_PAGES} ]]; do
-        page_file="${ARTIFACT_DIR}/aap-jobs/jobs-page-${page}.json"
+        page_file="$MGMT_CLUSTER_DIR/aap-jobs/jobs-page-${page}.json"
         curl "${AAP_AUTH[@]}" \
             "https://${AAP_ROUTE}/api/controller/v2/jobs/?page=${page}&page_size=50&order_by=id" \
             > "${page_file}" 2>&1 || break
@@ -367,30 +373,30 @@ if [[ -n "${AAP_ROUTE}" && -n "${AAP_ADMIN_PW}" ]]; then
                 | tr -c 'A-Za-z0-9._-' '_' | head -c 100)
             curl "${AAP_AUTH[@]}" \
                 "https://${AAP_ROUTE}/api/controller/v2/jobs/${job_id}/stdout/?format=txt" \
-                > "${ARTIFACT_DIR}/aap-jobs/job-${job_id}-${status}-${name}.txt" 2>&1 &
+                > "$MGMT_CLUSTER_DIR/aap-jobs/job-${job_id}-${status}-${name}.txt" 2>&1 &
         done
         next=$(jq -r '.next // empty' "${page_file}")
         [[ -z "${next}" || "${next}" == "null" ]] && break
         page=$((page + 1))
     done
     wait
-    echo "  Captured stdout for $(find "${ARTIFACT_DIR}/aap-jobs" -name "job-*.txt" | wc -l) AAP jobs"
+    echo "  Captured stdout for $(find "$MGMT_CLUSTER_DIR/aap-jobs" -name "job-*.txt" | wc -l) AAP jobs"
     curl "${AAP_AUTH[@]}" \
         "https://${AAP_ROUTE}/api/controller/v2/project_updates/?page_size=50&order_by=id" \
-        > "${ARTIFACT_DIR}/aap-jobs/project-updates.json" 2>&1 || true
-    if ! jq -e '.results | type == "array"' "${ARTIFACT_DIR}/aap-jobs/project-updates.json" &>/dev/null; then
+        > "$MGMT_CLUSTER_DIR/aap-jobs/project-updates.json" 2>&1 || true
+    if ! jq -e '.results | type == "array"' "$MGMT_CLUSTER_DIR/aap-jobs/project-updates.json" &>/dev/null; then
         echo "  Skipping AAP project updates: invalid response"
     else
-    for pu_id in $(jq -r '.results[]?.id // empty' "${ARTIFACT_DIR}/aap-jobs/project-updates.json"); do
+    for pu_id in $(jq -r '.results[]?.id // empty' "$MGMT_CLUSTER_DIR/aap-jobs/project-updates.json"); do
         status=$(jq -r ".results[] | select(.id == ${pu_id}) | .status // \"unknown\"" \
-            "${ARTIFACT_DIR}/aap-jobs/project-updates.json")
+            "$MGMT_CLUSTER_DIR/aap-jobs/project-updates.json")
         curl "${AAP_AUTH[@]}" \
             "https://${AAP_ROUTE}/api/controller/v2/project_updates/${pu_id}/stdout/?format=txt" \
-            > "${ARTIFACT_DIR}/aap-jobs/project-update-${pu_id}-${status}.txt" 2>&1 &
+            > "$MGMT_CLUSTER_DIR/aap-jobs/project-update-${pu_id}-${status}.txt" 2>&1 &
     done
     wait
     fi
-    echo "  Captured $(find "${ARTIFACT_DIR}/aap-jobs" -name "project-update-*.txt" | wc -l) AAP project updates"
+    echo "  Captured $(find "$MGMT_CLUSTER_DIR/aap-jobs" -name "project-update-*.txt" | wc -l) AAP project updates"
 else
     echo "  AAP route or admin password not found, skipping job stdout capture"
 fi
