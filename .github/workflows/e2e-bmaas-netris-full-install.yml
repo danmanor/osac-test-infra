@@ -578,10 +578,6 @@ jobs:
         continue-on-error: true
         run: make gather-suite INFRA=netris SUITE=bmaas_networking
 
-      - name: Stage categorized infrastructure artifacts for redacted collection
-        if: always()
-        shell: bash
-        run: .github/scripts/stage-netris-artifacts.sh
       - name: Select kubeconfig for artifact collection
         id: artifact-kubeconfig
         if: always()

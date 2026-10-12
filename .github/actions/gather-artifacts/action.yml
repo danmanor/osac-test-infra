@@ -33,6 +33,11 @@ runs:
         JUNIT_PATH: ${{ inputs.junit-path }}
       run: |
         ARTIFACT_DIR="${RUNNER_TEMP}/osac-artifacts"
+        if [[ -d "${ARTIFACT_DIR}/netris-logs" \
+          || -d "${GITHUB_WORKSPACE}/infra/netris/logs" \
+          || -f "${ARTIFACT_DIR}/cluster-collection-status.txt" ]]; then
+          "$GITHUB_WORKSPACE/.github/scripts/stage-netris-artifacts.sh"
+        fi
         if timeout 900 "$GITHUB_WORKSPACE/scripts/gather-osac-logs.sh" "${ARTIFACT_DIR}"; then
           touch "${ARTIFACT_DIR}/.redaction-complete"
         fi
