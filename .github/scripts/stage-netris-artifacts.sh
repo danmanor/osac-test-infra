@@ -42,7 +42,7 @@ if [[ -n "$input_logs" && -d "$input_logs" ]]; then
         exit 1
     fi
 
-    # Keep the management-cluster gatherer's per-container logs as the
+    # Preserve the management-cluster gatherer's per-container logs as the
     # canonical copy when the generic gather step already ran earlier.
     if [[ -d "$input_logs/mgmt-cluster/namespaces" ]]; then
         for pods_dir in "$input_logs/mgmt-cluster/namespaces/"*/pods; do
@@ -52,28 +52,28 @@ if [[ -n "$input_logs" && -d "$input_logs" ]]; then
         done
     fi
 
+    # Ansible gather roles already write into artifact categories. Preserve
+    # those relative paths here; this step only stages their files and strips
+    # the legacy netris-logs wrapper when older workflow definitions add it.
     for source in "$input_logs"/*; do
         [[ -e "$source" || -L "$source" ]] || continue
         case "$(basename "$source")" in
-            mgmt-cluster)
-                mkdir -p "$staging_dir/mgmt-cluster"
+            mgmt-cluster|lab)
+                mkdir -p "$staging_dir/$(basename "$source")"
                 if [[ -d "$source" ]]; then
-                    cp -a "$source/." "$staging_dir/mgmt-cluster/"
+                    cp -a "$source/." "$staging_dir/$(basename "$source")/"
                 else
-                    cp -a "$source" "$staging_dir/mgmt-cluster/"
+                    cp -a "$source" "$staging_dir/$(basename "$source")/"
                 fi
                 ;;
-            bmaas)
-                mkdir -p "$staging_dir/mgmt-cluster/bmaas"
-                cp -a "$source/." "$staging_dir/mgmt-cluster/bmaas/"
-                ;;
-            lab)
-                mkdir -p "$staging_dir/lab"
-                cp -a "$source/." "$staging_dir/lab/"
-                ;;
-            *)
+            ansible.log|run-metadata.txt)
+                # Compatibility for workflow definitions that still write
+                # these Netris run files at the gather root.
                 mkdir -p "$staging_dir/lab"
                 cp -a "$source" "$staging_dir/lab/"
+                ;;
+            *)
+                cp -a "$source" "$staging_dir/"
                 ;;
         esac
     done

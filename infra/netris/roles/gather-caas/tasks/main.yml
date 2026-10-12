@@ -14,7 +14,7 @@
 
 - name: Create caas gather subdirectories
   ansible.builtin.file:
-    path: "{{ _gather_dir }}/caas/{{ item }}"
+    path: "{{ _gather_dir }}/mgmt-cluster/caas/{{ item }}"
     state: directory
     mode: "0755"
   failed_when: false
@@ -45,8 +45,8 @@
   ansible.builtin.shell: |
     curl -sfk -H "Authorization: Bearer ${GATHER_TOKEN}" \
       "https://{{ _gather_fulfillment_host.stdout }}/api/private/v1/bare_metal_instance_types" \
-      2>&1 | python3 -m json.tool > {{ _gather_dir }}/caas/fulfillment-api/bare-metal-instance-types.json 2>&1 \
-      || echo "unavailable" > {{ _gather_dir }}/caas/fulfillment-api/bare-metal-instance-types.json
+      2>&1 | python3 -m json.tool > {{ _gather_dir }}/mgmt-cluster/caas/fulfillment-api/bare-metal-instance-types.json 2>&1 \
+      || echo "unavailable" > {{ _gather_dir }}/mgmt-cluster/caas/fulfillment-api/bare-metal-instance-types.json
   environment:
     GATHER_TOKEN: "{{ _gather_sa_token.stdout }}"
   changed_when: false
@@ -58,8 +58,8 @@
   ansible.builtin.shell: |
     curl -sfk -H "Authorization: Bearer ${GATHER_TOKEN}" \
       "https://{{ _gather_fulfillment_host.stdout }}/api/private/v1/cluster_catalog_items" \
-      2>&1 | python3 -m json.tool > {{ _gather_dir }}/caas/fulfillment-api/catalog-items.json 2>&1 \
-      || echo "unavailable" > {{ _gather_dir }}/caas/fulfillment-api/catalog-items.json
+      2>&1 | python3 -m json.tool > {{ _gather_dir }}/mgmt-cluster/caas/fulfillment-api/catalog-items.json 2>&1 \
+      || echo "unavailable" > {{ _gather_dir }}/mgmt-cluster/caas/fulfillment-api/catalog-items.json
   environment:
     GATHER_TOKEN: "{{ _gather_sa_token.stdout }}"
   changed_when: false
@@ -83,8 +83,8 @@
         json.dump(data, sys.stdout, indent=4)
     except Exception as e:
         print(f'Error: {e}')
-    " > {{ _gather_dir }}/caas/fulfillment-api/clusters.json 2>&1 \
-      || echo "unavailable" > {{ _gather_dir }}/caas/fulfillment-api/clusters.json
+    " > {{ _gather_dir }}/mgmt-cluster/caas/fulfillment-api/clusters.json 2>&1 \
+      || echo "unavailable" > {{ _gather_dir }}/mgmt-cluster/caas/fulfillment-api/clusters.json
   environment:
     GATHER_TOKEN: "{{ _gather_sa_token.stdout }}"
   changed_when: false
@@ -96,8 +96,8 @@
   ansible.builtin.shell: |
     curl -sfk -H "Authorization: Bearer ${GATHER_TOKEN}" \
       "https://{{ _gather_fulfillment_host.stdout }}/api/private/v1/cluster_templates" \
-      2>&1 | python3 -m json.tool > {{ _gather_dir }}/caas/fulfillment-api/cluster-templates.json 2>&1 \
-      || echo "unavailable" > {{ _gather_dir }}/caas/fulfillment-api/cluster-templates.json
+      2>&1 | python3 -m json.tool > {{ _gather_dir }}/mgmt-cluster/caas/fulfillment-api/cluster-templates.json 2>&1 \
+      || echo "unavailable" > {{ _gather_dir }}/mgmt-cluster/caas/fulfillment-api/cluster-templates.json
   environment:
     GATHER_TOKEN: "{{ _gather_sa_token.stdout }}"
   changed_when: false
@@ -110,7 +110,7 @@
   ansible.builtin.shell: |
     oc adm inspect \
       ns/{{ caas_discovery_infraenv_namespace }} \
-      --dest-dir={{ _gather_dir }}/caas/inspect/hosting \
+      --dest-dir={{ _gather_dir }}/mgmt-cluster/caas/inspect/hosting \
       2>&1 || echo "inspect failed or cluster unreachable"
   environment:
     KUBECONFIG: /root/.kube/config
@@ -159,7 +159,7 @@
 - name: Gather redaction-friendly hosted cluster diagnostics
   ansible.builtin.shell: |
     set +e
-    out="{{ _gather_dir }}/caas/hosted-cluster"
+    out="{{ _gather_dir }}/mgmt-cluster/caas/hosted-cluster"
     mkdir -p "$out/pods"
     kubeconfig=/tmp/caas-hosted-kubeconfig
     if [ ! -s "$kubeconfig" ]; then
@@ -218,7 +218,7 @@
 - name: Run oc adm must-gather on hosted cluster
   ansible.builtin.shell: |
     oc adm must-gather \
-      --dest-dir={{ _gather_dir }}/caas/must-gather/hosted-cluster \
+      --dest-dir={{ _gather_dir }}/mgmt-cluster/caas/must-gather/hosted-cluster \
       2>&1 || echo "must-gather failed or cluster unreachable"
   environment:
     KUBECONFIG: /tmp/caas-hosted-kubeconfig
@@ -230,7 +230,7 @@
   ansible.builtin.shell: |
     oc adm inspect \
       ns/{{ _hc_ns.stdout }}-{{ _hc_name.stdout }} \
-      --dest-dir={{ _gather_dir }}/caas/inspect/hosted-control-plane \
+      --dest-dir={{ _gather_dir }}/mgmt-cluster/caas/inspect/hosted-control-plane \
       2>&1 || echo "inspect failed or namespace not found"
   environment:
     KUBECONFIG: /root/.kube/config

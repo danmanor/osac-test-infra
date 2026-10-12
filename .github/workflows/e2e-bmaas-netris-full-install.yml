@@ -302,7 +302,7 @@ jobs:
     permissions:
       contents: read
     env:
-      ANSIBLE_LOG_PATH: ${{ github.workspace }}/infra/netris/logs/ansible.log
+      ANSIBLE_LOG_PATH: ${{ github.workspace }}/infra/netris/logs/lab/ansible.log
     outputs:
       result: ${{ steps.test.outcome == 'success' && 'PASSED' || 'FAILED' }}
     steps:
@@ -317,14 +317,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p infra/netris/logs
+          mkdir -p infra/netris/logs/lab
           {
             printf 'repository=%s\n' "${GITHUB_REPOSITORY}"
             printf 'workflow=%s\n' "${GITHUB_WORKFLOW}"
             printf 'run_id=%s\nrun_attempt=%s\n' "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
             printf 'ref=%s\ncommit=%s\n' "${GITHUB_REF}" "$(git rev-parse HEAD)"
             printf 'run_url=%s/%s/actions/runs/%s\n' "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}"
-          } > infra/netris/logs/run-metadata.txt
+          } > infra/netris/logs/lab/run-metadata.txt
 
       - name: Validate OSAC source inputs
         shell: bash

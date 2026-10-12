@@ -16,6 +16,12 @@ set -o pipefail
 
 ARTIFACT_DIR="${1:-./osac-logs}"
 MGMT_CLUSTER_DIR="$ARTIFACT_DIR/mgmt-cluster"
+STORAGE_DIR="$MGMT_CLUSTER_DIR/storage"
+# Netris opts into the OLM grouping from its artifact-staging path; all other
+# callers keep the existing management-cluster/storage location.
+if [[ "${NETRIS_ARTIFACT_LAYOUT:-false}" == "true" ]]; then
+    STORAGE_DIR="$MGMT_CLUSTER_DIR/olm/storage"
+fi
 E2E_NAMESPACE="${E2E_NAMESPACE:-osac-e2e-ci}"
 JUNIT_PATH="${JUNIT_PATH:-}"
 
@@ -321,17 +327,17 @@ done
 wait
 
 echo "Collecting storage diagnostics..."
-mkdir -p "$MGMT_CLUSTER_DIR/storage"
-oc get pods -n openshift-storage -o wide > "$MGMT_CLUSTER_DIR/storage/pods.txt" 2>&1 || true
-oc get events -n openshift-storage --sort-by=.lastTimestamp > "$MGMT_CLUSTER_DIR/storage/events.txt" 2>&1 || true
-oc get lvmcluster -n openshift-storage -o yaml > "$MGMT_CLUSTER_DIR/storage/lvmcluster.yaml" 2>&1 || true
-oc get lvmvolumegroups -n openshift-storage -o yaml > "$MGMT_CLUSTER_DIR/storage/lvmvolumegroups.yaml" 2>&1 || true
-oc get sc -o wide > "$MGMT_CLUSTER_DIR/storage/storageclasses.txt" 2>&1 || true
-oc get pv -o wide > "$MGMT_CLUSTER_DIR/storage/pvs.txt" 2>&1 || true
-oc get pvc -A -o wide > "$MGMT_CLUSTER_DIR/storage/pvcs-all.txt" 2>&1 || true
-oc get volumeattachments -o wide > "$MGMT_CLUSTER_DIR/storage/volumeattachments.txt" 2>&1 || true
+mkdir -p "$STORAGE_DIR"
+oc get pods -n openshift-storage -o wide > "$STORAGE_DIR/pods.txt" 2>&1 || true
+oc get events -n openshift-storage --sort-by=.lastTimestamp > "$STORAGE_DIR/events.txt" 2>&1 || true
+oc get lvmcluster -n openshift-storage -o yaml > "$STORAGE_DIR/lvmcluster.yaml" 2>&1 || true
+oc get lvmvolumegroups -n openshift-storage -o yaml > "$STORAGE_DIR/lvmvolumegroups.yaml" 2>&1 || true
+oc get sc -o wide > "$STORAGE_DIR/storageclasses.txt" 2>&1 || true
+oc get pv -o wide > "$STORAGE_DIR/pvs.txt" 2>&1 || true
+oc get pvc -A -o wide > "$STORAGE_DIR/pvcs-all.txt" 2>&1 || true
+oc get volumeattachments -o wide > "$STORAGE_DIR/volumeattachments.txt" 2>&1 || true
 for pod in $(oc get pods -n openshift-storage -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-    oc logs "${pod}" -n openshift-storage > "$MGMT_CLUSTER_DIR/storage/pod-${pod}.log" 2>&1 || true
+    oc logs "${pod}" -n openshift-storage > "$STORAGE_DIR/pod-${pod}.log" 2>&1 || true
 done
 
 echo "Collecting MachineConfig diagnostics..."

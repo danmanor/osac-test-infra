@@ -5,13 +5,13 @@
 
 - name: Create gather subdirectory
   ansible.builtin.file:
-    path: "{{ _gather_dir }}/bmaas"
+    path: "{{ _gather_dir }}/mgmt-cluster/bmaas"
     state: directory
     mode: "0755"
 
 - name: Gather BMH status
   ansible.builtin.shell:
-    cmd: oc get bmh -n {{ bmaas_bmh_namespace }} -o yaml > {{ _gather_dir }}/bmaas/bmh-status.yaml
+    cmd: oc get bmh -n {{ bmaas_bmh_namespace }} -o yaml > {{ _gather_dir }}/mgmt-cluster/bmaas/bmh-status.yaml
   environment:
     KUBECONFIG: /root/.kube/config
   failed_when: false
@@ -19,7 +19,7 @@
 
 - name: Gather BareMetalInstance CRs
   ansible.builtin.shell:
-    cmd: oc get baremetalinstances -A -o yaml > {{ _gather_dir }}/bmaas/baremetalinstances.yaml
+    cmd: oc get baremetalinstances -A -o yaml > {{ _gather_dir }}/mgmt-cluster/bmaas/baremetalinstances.yaml
   environment:
     KUBECONFIG: /root/.kube/config
   failed_when: false
@@ -31,7 +31,7 @@
       oc logs -n openshift-machine-api
       -l baremetal.openshift.io/cluster-baremetal-operator=metal3-state
       --all-containers --tail=500
-      > {{ _gather_dir }}/bmaas/ironic-logs.txt 2>&1
+      > {{ _gather_dir }}/mgmt-cluster/bmaas/ironic-logs.txt 2>&1
   environment:
     KUBECONFIG: /root/.kube/config
   failed_when: false
@@ -43,7 +43,7 @@
       oc logs -n {{ osac_namespace }}
       -l app.kubernetes.io/name=bare-metal-fulfillment-operator
       --all-containers --tail=500
-      > {{ _gather_dir }}/bmaas/bmf-operator-logs.txt 2>&1
+      > {{ _gather_dir }}/mgmt-cluster/bmaas/bmf-operator-logs.txt 2>&1
   environment:
     KUBECONFIG: /root/.kube/config
   failed_when: false
@@ -51,7 +51,7 @@
 
 - name: Gather sushy-tools logs
   ansible.builtin.shell:
-    cmd: cp {{ sushy_tools_config_dir }}/sushy.log {{ _gather_dir }}/bmaas/sushy-tools.log 2>/dev/null || true
+    cmd: cp {{ sushy_tools_config_dir }}/sushy.log {{ _gather_dir }}/mgmt-cluster/bmaas/sushy-tools.log 2>/dev/null || true
   failed_when: false
   changed_when: false
 
@@ -61,10 +61,10 @@
       TOKEN=$(oc create token -n {{ osac_namespace }} admin 2>/dev/null)
       HOST=$(oc get route fulfillment-internal-api -n {{ osac_namespace }} -o jsonpath='{.status.ingress[0].host}' 2>/dev/null)
       if [ -n "$TOKEN" ] && [ -n "$HOST" ]; then
-        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/bare_metal_instance_types" > {{ _gather_dir }}/bmaas/bmi-instance-types.json 2>/dev/null
-        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_templates" > {{ _gather_dir }}/bmaas/bmi-templates.json 2>/dev/null
-        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_catalog_items" > {{ _gather_dir }}/bmaas/bmi-catalog-items.json 2>/dev/null
-        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instances" | python3 -c 'import sys,json; d=json.load(sys.stdin); [i.pop("template_parameters",None) for i in d.get("items",[])]; json.dump(d,sys.stdout,indent=2)' > {{ _gather_dir }}/bmaas/bmi-instances.json 2>/dev/null
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/bare_metal_instance_types" > {{ _gather_dir }}/mgmt-cluster/bmaas/bmi-instance-types.json 2>/dev/null
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_templates" > {{ _gather_dir }}/mgmt-cluster/bmaas/bmi-templates.json 2>/dev/null
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instance_catalog_items" > {{ _gather_dir }}/mgmt-cluster/bmaas/bmi-catalog-items.json 2>/dev/null
+        curl -sk -H "Authorization: Bearer $TOKEN" "https://${HOST}/api/private/v1/baremetal_instances" | python3 -c 'import sys,json; d=json.load(sys.stdin); [i.pop("template_parameters",None) for i in d.get("items",[])]; json.dump(d,sys.stdout,indent=2)' > {{ _gather_dir }}/mgmt-cluster/bmaas/bmi-instances.json 2>/dev/null
       fi
   environment:
     KUBECONFIG: /root/.kube/config
