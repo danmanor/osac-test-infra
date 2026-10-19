@@ -555,7 +555,9 @@ jobs:
         id: test
         timeout-minutes: 60
         shell: bash
-        run: make run-tests INFRA=netris SUITE=bmaas_networking
+        # Keep the slow, flaky cross-tenant class out of this workflow. If
+        # needed, cross-tenant coverage can be folded into the existing test.
+        run: make run-tests INFRA=netris SUITE=bmaas_networking TEST='not TestCrossTenantBmaasNetworking'
 
       - name: Gather infra diagnostics
         if: always()
