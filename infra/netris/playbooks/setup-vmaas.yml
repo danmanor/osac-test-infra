@@ -53,6 +53,12 @@
       register: _vmaas_network_raw
       changed_when: false
 
+    - name: Read OCP nodes
+      ansible.builtin.command:
+        argv: [oc, get, nodes, -o, json]
+      register: _vmaas_nodes_raw
+      changed_when: false
+
     - name: Wait for OVN EVPN API definitions to become Established
       ansible.builtin.command:
         argv:
@@ -97,6 +103,10 @@
         _vmaas_infrastructure: "{{ _vmaas_infrastructure_raw.stdout | from_json }}"
         _vmaas_cluster_version: "{{ _vmaas_cluster_version_raw.stdout | from_json }}"
         _vmaas_network: "{{ _vmaas_network_raw.stdout | from_json }}"
+        _vmaas_node_names: >-
+          {{ (_vmaas_nodes_raw.stdout | from_json).items | map(attribute='metadata.name') | list }}
+        _vmaas_node_name: >-
+          {{ ((_vmaas_nodes_raw.stdout | from_json).items | map(attribute='metadata.name') | list | first) | default('', true) }}
         _vmaas_network_operator: "{{ _vmaas_network_operator_raw.stdout | from_json }}"
         _vmaas_current_history: >-
           {{ (_vmaas_cluster_version_raw.stdout | from_json).status.history | default([], true) | first | default({}, true) }}
@@ -132,8 +142,9 @@
           - (_vmaas_cv_failing | string) == 'False'
           - _vmaas_cv_observed_generation == _vmaas_cv_metadata_generation
           - _vmaas_network.spec.defaultNetwork.type == 'OVNKubernetes'
+          - _vmaas_node_names | length == 1
         fail_msg: >-
-          VMaaS CUDN EVPN requires a converged OCP {{ ocp_evpn_required_version }}
+          VMaaS CUDN EVPN requires a converged single-node OCP {{ ocp_evpn_required_version }}
           cluster using OVNKubernetes. Observed platform={{
           _vmaas_infrastructure.status.platformStatus.type | default('Unknown') }},
           desired={{ _vmaas_desired_version }}, current={{ _vmaas_current_version }},
@@ -182,7 +193,12 @@
 
     - name: Read the single-node underlay NNCP
       ansible.builtin.command:
-        argv: [oc, get, nncp/tenant-evpn-underlay, -o, json]
+        argv:
+          - oc
+          - get
+          - "nncp/osac-evpn-{{ _vmaas_node_name }}"
+          - -o
+          - json
       register: _vmaas_nncp_raw
       until: >-
         _vmaas_nncp_raw.rc == 0 and
@@ -209,19 +225,33 @@
 
     - name: Read the OCP FRR peer configuration
       ansible.builtin.command:
-        argv: [oc, get, frrconfigurations.frrk8s.metallb.io/tenant-evpn, -n, openshift-frr-k8s, -o, json]
+        argv:
+          - oc
+          - get
+          - "frrconfigurations.frrk8s.metallb.io/osac-evpn-{{ _vmaas_node_name }}"
+          - -n
+          - openshift-frr-k8s
+          - -o
+          - json
       register: _vmaas_frr_raw
       changed_when: false
 
     - name: Read the OCP host EVPN address-family configuration
       ansible.builtin.command:
-        argv: [oc, get, frrconfigurations.frrk8s.metallb.io/tenant-evpn-advertise, -n, openshift-frr-k8s, -o, json]
+        argv:
+          - oc
+          - get
+          - "frrconfigurations.frrk8s.metallb.io/osac-evpn-raw-{{ _vmaas_node_name }}"
+          - -n
+          - openshift-frr-k8s
+          - -o
+          - json
       register: _vmaas_evpn_frr_raw
       changed_when: false
 
     - name: Read the OCP RouteAdvertisements resource
       ansible.builtin.command:
-        argv: [oc, get, routeadvertisements.k8s.ovn.org/tenant-evpn, -o, json]
+        argv: [oc, get, routeadvertisements.k8s.ovn.org/osac-evpn, -o, json]
       register: _vmaas_route_advertisements_raw
       changed_when: false
 
@@ -275,7 +305,7 @@
             (_vmaas_nncp.status.conditions | default([])
              | selectattr('type', 'equalto', 'Available')
              | selectattr('status', 'equalto', 'True') | list | length) > 0
-        fail_msg: "NNCP tenant-evpn-underlay is not Available=True."
+        fail_msg: "NNCP osac-evpn-{{ _vmaas_node_name }} is not Available=True."
 
     - name: Require the VTEP to be allocated
       ansible.builtin.assert:
@@ -296,8 +326,9 @@
           - _vmaas_frr.spec.bgp.routers[0].neighbors | length == 1
           - _vmaas_frr.spec.bgp.routers[0].neighbors[0].address == _vmaas_leaf_peer_ip
         fail_msg: >-
-          FRRConfiguration tenant-evpn must have the evpn=true label and one
-          default-VRF neighbor matching the leaf endpoint {{ _vmaas_leaf_peer_ip }}.
+          FRRConfiguration osac-evpn-{{ _vmaas_node_name }} must have the
+          evpn=true label and one default-VRF neighbor matching the leaf
+          endpoint {{ _vmaas_leaf_peer_ip }}.
 
     - name: Require the OCP host EVPN address family
       ansible.builtin.assert:
@@ -309,8 +340,8 @@
           - "'allowas-in origin' in (_vmaas_evpn_frr.spec.raw.rawConfig | default(''))"
           - "'advertise-all-vni' in (_vmaas_evpn_frr.spec.raw.rawConfig | default(''))"
         fail_msg: >-
-          FRRConfiguration tenant-evpn-advertise must configure the selected leaf
-          {{ _vmaas_leaf_peer_ip }} in the host L2VPN EVPN address family with
+          FRRConfiguration osac-evpn-raw-{{ _vmaas_node_name }} must configure
+          the selected leaf {{ _vmaas_leaf_peer_ip }} in the host L2VPN EVPN address family with
           allowas-in origin and advertise-all-vni.
 
     - name: Require the OCP-to-Netris BGP session to be Established
@@ -336,7 +367,7 @@
              | selectattr('type', 'equalto', 'Accepted')
              | selectattr('status', 'equalto', 'True') | list | length) > 0)
         fail_msg: >-
-          RouteAdvertisements tenant-evpn must select the EVPN FRRConfiguration
+          RouteAdvertisements osac-evpn must select the EVPN FRRConfiguration
           and CUDNs for PodNetwork only, and must be accepted once an EVPN CUDN
           exists. Service ExternalIPs and EgressIPs require their separate fabric
           policy/route path.

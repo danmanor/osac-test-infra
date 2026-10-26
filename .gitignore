@@ -22,6 +22,7 @@ reports/
 
 # Infrastructure backend outputs
 infra/*/.env.infra
+infra/netris/.evpn-values.yaml
 
 # Workflow artifacts
 # AI workflow artifacts

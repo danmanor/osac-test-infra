@@ -20,9 +20,12 @@ _KUBECONFIG_ABS = $(abspath $(KUBECONFIG))
 _OSAC_VM_KUBECONFIG_ABS = $(abspath $(OSAC_VM_KUBECONFIG))
 
 # VMaaS selectors and full-ci configure the OCP host as an EVPN VTEP; legacy suites keep their established root path.
-OCP_KUBECONFIG = $(if $(filter vmaas vmaas_networking stretched_networking full,$(SUITE)),$(_KUBECONFIG_ABS),/root/.kube/config)
-VMAAS_UNDERLAY_EXTRA = $(if $(filter vmaas vmaas_networking stretched_networking full,$(SUITE)),-e ocp_underlay_enabled=true,)
+EVPN_SUITES = vmaas vmaas_networking stretched_networking full
+OCP_KUBECONFIG = $(if $(filter $(EVPN_SUITES),$(SUITE)),$(_KUBECONFIG_ABS),/root/.kube/config)
+VMAAS_UNDERLAY_EXTRA = $(if $(filter $(EVPN_SUITES),$(SUITE)),-e ocp_underlay_enabled=true,)
 OCP_ANSIBLE_EXTRA = $(ANSIBLE_EXTRA) -e 'ocp_evpn_kubeconfig_path=$(OCP_KUBECONFIG)' $(VMAAS_UNDERLAY_EXTRA)
+EVPN_VALUES_FILE = $(abspath .evpn-values.yaml)
+VMAAS_EVPN_VALUES_EXTRA = $(if $(filter $(EVPN_SUITES),$(SUITE)),-f $(EVPN_VALUES_FILE))
 
 # ─── Convenience targets ───────────────────────────────────────────
 #
@@ -54,6 +57,7 @@ deploy-infra:
 	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA) $(VMAAS_UNDERLAY_EXTRA)
 
 deploy-ocp:
+	@rm -f .evpn-values.yaml
 	ansible-playbook playbooks/deploy-ocp.yml -e suite=$(SUITE) $(OCP_ANSIBLE_EXTRA)
 
 deploy-osac:
@@ -126,6 +130,7 @@ destroy-osac:
 
 destroy-ocp:
 	ansible-playbook playbooks/destroy-ocp.yml $(OCP_ANSIBLE_EXTRA)
+	@rm -f .evpn-values.yaml
 
 destroy-infra:
 	ansible-playbook playbooks/destroy-infra.yml $(ANSIBLE_EXTRA)
@@ -234,11 +239,16 @@ prep-osac:
 	ansible-playbook playbooks/prep-osac.yml $(OCP_ANSIBLE_EXTRA)
 
 run-osac-setup:
+	@if [ -n "$(VMAAS_EVPN_VALUES_EXTRA)" ] && [ ! -s "$(EVPN_VALUES_FILE)" ]; then \
+		echo "Missing $(EVPN_VALUES_FILE); run make deploy-ocp SUITE=$(SUITE) first." >&2; \
+		exit 1; \
+	fi
 	@echo "=== Installing OSAC infrastructure via Helm (make install-infra) ==="
 	cd /opt/osac/osac-installer && KUBECONFIG=$(OCP_KUBECONFIG) make install-infra \
 		PLATFORM=openshift \
 		PROFILE=$(OSAC_PROFILE) \
-		NS=$(OSAC_NAMESPACE)
+		NS=$(OSAC_NAMESPACE) \
+		INFRA_VALUES_EXTRA="$(VMAAS_EVPN_VALUES_EXTRA)"
 	@echo "=== Creating external Netris credentials ==="
 	ansible-playbook playbooks/create-netris-credentials.yml $(OCP_ANSIBLE_EXTRA)
 	@echo "=== Installing OSAC application via Helm (make install-osac) ==="

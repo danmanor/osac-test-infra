@@ -270,9 +270,10 @@ bmaas_provisioning_snat_cidr: "198.51.100.32/29"
 # NAT pools live.
 bmaas_provisioning_snat_vpc_id: 1
 
-# OpenShift CUDN EVPN prerequisites. The role requires a converged OCP 4.22
-# OVNKubernetes cluster, the single-node underlay link, and operator-confirmed
-# network allocations. The OCP cluster may use the virtualized `None` platform.
+# OpenShift CUDN EVPN inputs. The role validates a converged OCP 4.22
+# OVNKubernetes cluster and the single-node underlay, then writes private
+# installer values. osac-installer configures the OpenShift-side resources.
+# The OCP cluster may use the virtualized `None` platform.
 ocp_evpn_kubeconfig_path: "/root/.kube/config"
 ocp_evpn_required_version: "4.22"
 
@@ -285,6 +286,7 @@ ocp_vmaas_external_ip_return_path_acknowledged: false
 ocp_vmaas_external_ip_tests_enabled: false
 
 # Dedicated RFC 2544 test range for this isolated lab's VTEP interface.
+# The installer requires the fixed dummy interface name `evpn-vtep0`.
 ocp_evpn_vtep_cidr: "198.18.0.0/24"
 ocp_evpn_vtep_node_ip_cidr: "198.18.0.1/32"
 ocp_evpn_vtep_dummy_interface: "evpn-vtep0"
