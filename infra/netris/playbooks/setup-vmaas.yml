@@ -104,9 +104,9 @@
         _vmaas_cluster_version: "{{ _vmaas_cluster_version_raw.stdout | from_json }}"
         _vmaas_network: "{{ _vmaas_network_raw.stdout | from_json }}"
         _vmaas_node_names: >-
-          {{ (_vmaas_nodes_raw.stdout | from_json).items | map(attribute='metadata.name') | list }}
+          {{ (_vmaas_nodes_raw.stdout | from_json)['items'] | map(attribute='metadata.name') | list }}
         _vmaas_node_name: >-
-          {{ ((_vmaas_nodes_raw.stdout | from_json).items | map(attribute='metadata.name') | list | first) | default('', true) }}
+          {{ ((_vmaas_nodes_raw.stdout | from_json)['items'] | map(attribute='metadata.name') | list | first) | default('', true) }}
         _vmaas_network_operator: "{{ _vmaas_network_operator_raw.stdout | from_json }}"
         _vmaas_current_history: >-
           {{ (_vmaas_cluster_version_raw.stdout | from_json).status.history | default([], true) | first | default({}, true) }}
@@ -282,7 +282,7 @@
       register: _vmaas_bgp_sessions_raw
       until: >-
         _vmaas_bgp_sessions_raw.rc == 0 and
-        ((_vmaas_bgp_sessions_raw.stdout | from_json).items | default([])
+        ((_vmaas_bgp_sessions_raw.stdout | from_json)['items'] | default([])
          | selectattr('status.bgpStatus', 'equalto', 'Established') | list | length) > 0
       retries: 60
       delay: 10
