@@ -22,6 +22,8 @@ uv sync
 make test-vmaas
 ```
 
+`make test-vmaas` runs the mono-repo `tests/e2e/networking/vmaas/` module, which needs the Netris networking environment (a lab from `make e2e INFRA=netris DEPLOY_SUITE=vmaas`). Against another cluster, `uv run pytest tests/e2e/vmaas/` in the mono-repo is the generic way.
+
 See [Running Tests Locally](#running-tests-locally) below for the full command reference
 (all suites, single-test filters, sequential debugging runs) and required environment variables.
 
@@ -32,9 +34,9 @@ and [README.md](README.md) for the human-facing overview):
 
 - **`infra/<backend>/`** — pluggable infrastructure backends that provision a cluster and deploy
   OSAC. Each backend implements `Makefile` (targets `setup-infra`, `deploy-infra`, `deploy-osac`,
-  `setup-<suite>`, `destroy-osac`, `destroy-infra`, `gather-infra`, `gather-<suite>`) and a
-  `capabilities` file declaring `SUPPORTED_SUITES`. `deploy-osac` writes `.env.infra` with the
-  cluster config tests need. Currently only `infra/netris/` is implemented (`SUPPORTED_SUITES="caas bmaas bmaas_networking"`
+  `setup-<deploy-suite>`, `destroy-osac`, `destroy-infra`, `gather-infra`, `gather-<deploy-suite>`) and a
+  `capabilities` file declaring `SUPPORTED_DEPLOY_SUITES`. `deploy-osac` writes `.env.infra` with the
+  cluster config tests need. Currently only `infra/netris/` is implemented (`SUPPORTED_DEPLOY_SUITES="caas maas bmaas vmaas full"`
   per `infra/netris/capabilities`).
 - **`tests/<suite>/`** — the pytest suites documented throughout this file. They are
   infrastructure-agnostic: they only consume environment variables, never which backend provisioned
@@ -42,11 +44,11 @@ and [README.md](README.md) for the human-facing overview):
   existing cluster" workflow (`uv sync && make test-vmaas`, etc.) still works exactly as before and
   remains the primary path when you already have a live OSAC deployment.
 
-Orchestration lives in the root `Makefile`: `make e2e INFRA=netris SUITE=caas` runs the full
+Orchestration lives in the root `Makefile`: `make e2e INFRA=netris DEPLOY_SUITE=caas` runs the full
 validate → setup-infra → deploy-infra → deploy-osac → setup-suite → run-tests pipeline; each step
 can also be run individually (`make setup-infra INFRA=netris`, etc.). `_validate-backend` checks
 `capabilities` before anything runs; `_validate-suite-contract` checks `.env.infra` against a
-per-suite `tests/<suite>/contract` file's `REQUIRED_VARS` before invoking `make test-<suite>`.
+per-suite `infra/<backend>/contracts/<test-suite>` file's `REQUIRED_VARS` before invoking `make test-<suite>`. `DEPLOY_SUITE` selects what is deployed and `TEST_SUITE` (default: the same name) selects the tests; see `infra/netris/targets.md`.
 
 Only touch this layer when working on infrastructure provisioning itself — for writing or fixing
 pytest tests, everything below in this file still applies unchanged.
@@ -64,7 +66,7 @@ osac-test-infra/
 │   ├── storage/        # Tenant storage lifecycle
 │   ├── catalog/        # CatalogItem lifecycle
 │   ├── bmaas/              # BareMetalInstance lifecycle
-│   ├── bmaas_networking/   # BMaaS networking E2E
+│   ├── (networking E2E lives in the osac mono-repo: tests/e2e/networking/{vmaas,bmaas,stretched})
 │   │                       # Cross-cutting concern fixtures live in tests/conftest.py
 │   └── core/               # Client wrappers, helpers, runner primitives
 ├── Makefile            # Build targets: test, lint, format, test-<suite>, plus infra orchestration
@@ -109,7 +111,7 @@ Place tests in the appropriate suite directory:
 - `tests/storage/` — Tenant storage
 - `tests/catalog/` — CatalogItem features
 - `tests/bmaas/` — BareMetalInstance features
-- `tests/bmaas_networking/` — BMaaS networking E2E
+- BMaaS, VMaaS and stretched networking E2E — `tests/e2e/networking/{bmaas,vmaas,stretched}/` in the osac mono-repo
 
 ### Naming Convention
 
