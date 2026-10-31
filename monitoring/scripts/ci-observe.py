@@ -20,7 +20,7 @@ Safety rules:
     holds recent traces in a container-local live store) and the data volume is never
     deleted. `down --purge` explicitly removes both.
   - Capture content is untrusted data: imports accept only closed captures whose metadata
-    matches the on-disk files (256 MiB total bound, regular files only, no symlinks,
+    matches the on-disk files (1 GiB total bound, regular files only, no symlinks,
     verified sha256, 16 MiB OTLP line bound). Nothing inside a capture is executed.
   - An import is marked imported only when the exporter counters show every accepted item
     sent (otelcol_receiver_accepted_* == otelcol_exporter_sent_* > 0, nothing refused or
@@ -28,7 +28,7 @@ Safety rules:
   - sync runs locally only (never inside CI, which holds no backend credentials) and treats
     GitHub artifact ZIPs as untrusted data: the ZIP structure is validated before anything
     is extracted (only the capture's file names, flat or under one directory, regular files
-    only, no symlinks, 256 MiB uncompressed bound enforced while streaming), each capture
+    only, no symlinks, 1 GiB uncompressed bound enforced while streaming), each capture
     then goes through the full import validation. Downloaded ZIPs are cached privately
     under the 0700 state tree and never re-downloaded; already-imported captures are
     skipped by digest and uncertain partial imports keep their refusal. The --watch loop
@@ -98,7 +98,10 @@ REPLAY_METRICS_PORT = 8888  # otelcol self-metrics, reachable on loopback via ho
 # requested port needs 'down --purge' before it can gain one.
 OPTIONAL_PORTS = {"tempo": (3200, "Tempo"), "loki": (3100, "Loki"), "metrics": (9090, "Prometheus")}
 
-CAPTURE_MAX_BYTES = 256 * 1024 * 1024
+# The capture PVC in cluster.yaml is 1 Gi, which is the real ceiling: a full
+# E2E suite under Beyla produces close to it (the first real capture was
+# 965 MB). The sync's bound matches the PVC so real captures are not refused.
+CAPTURE_MAX_BYTES = 1024 * 1024 * 1024
 OTLP_LINE_MAX_BYTES = 16 * 1024 * 1024
 METADATA_MAX_BYTES = 1024 * 1024
 CAPTURE_SCHEMA = "osac.ci-observe.capture"
@@ -120,7 +123,7 @@ ARTIFACT_NAME_PATTERNS = (
 ARTIFACT_MEMBERS = frozenset({"metadata.json"} | set(SIGNALS))
 CAPTURE_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
 SYNC_SINCE_HOURS = {"6h": 6, "12h": 12, "24h": 24, "2d": 48, "7d": 168}
-SYNC_RUN_LIST_LIMIT = 200  # runs fetched per sync iteration; the window is at most 7d
+SYNC_RUN_LIST_LIMIT = 1000  # runs fetched per sync iteration; busy repos exceed 200/day
 SYNC_WATCH_INTERVAL_S = 300
 SYNC_DEFAULT_LIMIT = 10
 REPLAY_CONFIG = Path(__file__).resolve().parents[1] / "config" / "ci-observe" / "replay.yaml"
@@ -419,7 +422,7 @@ def validate_capture(capture_dir: Path, *, tolerate_modified: bool = False) -> d
         total += size
         entries.append((rel_path, size, file_hash))
     if total > CAPTURE_MAX_BYTES:
-        raise ToolError(f"declared capture size {total} bytes exceeds the 256 MiB bound")
+        raise ToolError(f"declared capture size {total} bytes exceeds the 1 GiB bound")
     actual: set[str] = set()
     for cur, dirnames, filenames in os.walk(capture_dir, followlinks=False):
         for name in dirnames + filenames:
@@ -1146,12 +1149,44 @@ def list_workflow_runs(repository: str, since: datetime) -> list[dict[str, Any]]
     return runs
 
 
-def list_artifacts(repository: str) -> list[dict[str, Any]]:
-    """Newest-first artifact records for the repository (one page, at most 100)."""
-    data = gh_json(["api", f"repos/{repository}/actions/artifacts?per_page=100"])
-    if not isinstance(data, dict) or not isinstance(data.get("artifacts"), list):
-        raise ToolError(f"unexpected artifact listing response for {repository}")
-    return [artifact for artifact in data["artifacts"] if isinstance(artifact, dict)]
+def list_run_artifacts(repository: str, run_id: int) -> list[dict[str, Any]]:
+    """Artifacts of one run, via the per-run listing endpoint, with retries.
+
+    The repository-wide listing (repos/{repo}/actions/artifacts) is unstable
+    for repositories with tens of thousands of artifacts: GitHub
+    intermittently answers it with a bare 500 and an empty body, which gh
+    surfaces as unparseable JSON. The per-run listing returns a handful of
+    records and is stable; transient failures still get a short retry. The
+    per-run response carries no workflow_run, so the run id is injected for
+    the artifact matching to cross-check.
+    """
+
+    def fetch_page(page: int) -> list[dict[str, Any]]:
+        args = ["api", f"repos/{repository}/actions/runs/{run_id}/artifacts?per_page=100&page={page}"]
+        last_error = "no attempt made"
+        for remaining in range(3, 0, -1):
+            try:
+                data = gh_json(args)
+                if not isinstance(data, dict) or not isinstance(data.get("artifacts"), list):
+                    raise ToolError(f"unexpected artifact listing response for run {run_id}")
+                return [artifact for artifact in data["artifacts"] if isinstance(artifact, dict)]
+            except ToolError as err:
+                last_error = str(err)
+                if remaining > 1:
+                    time.sleep(5)
+        raise ToolError(f"gh {' '.join(args)} failed after retries: {last_error}")
+
+    # Every page, not just the first: a run with more than 100 artifacts
+    # could carry its telemetry artifact on a later page, and a miss here
+    # would mark the run as having no telemetry permanently.
+    collected: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        page_artifacts = fetch_page(page)
+        collected.extend(page_artifacts)
+        if len(page_artifacts) < 100:
+            return [artifact | {"workflow_run": {"id": run_id}} for artifact in collected]
+        page += 1
 
 
 def find_telemetry_artifacts(
@@ -1212,7 +1247,7 @@ def download_artifact(repository: str, artifact_id: object, dest: Path) -> None:
     os.chmod(dest.parent, 0o700)
     proc = gh(["api", f"repos/{repository}/actions/artifacts/{artifact_id}/zip"])
     if len(proc.stdout) > CAPTURE_MAX_BYTES:
-        raise ToolError(f"artifact {artifact_id} exceeds the 256 MiB bound")
+        raise ToolError(f"artifact {artifact_id} exceeds the 1 GiB bound")
     tmp = dest.with_name(dest.name + ".tmp")
     tmp.write_bytes(proc.stdout)
     os.chmod(tmp, 0o600)
@@ -1271,7 +1306,7 @@ def extract_artifact_zip(zip_path: Path, staging: Path) -> dict[str, Any]:
             if metadata_size > METADATA_MAX_BYTES:
                 raise ToolError("artifact metadata.json exceeds the 1 MiB bound")
             if total > CAPTURE_MAX_BYTES:
-                raise ToolError(f"artifact ZIP expands to {total} bytes, exceeding the 256 MiB bound")
+                raise ToolError(f"artifact ZIP expands to {total} bytes, exceeding the 1 GiB bound")
             staging.mkdir(mode=0o700, parents=True)
             written = 0
             for info, rel in entries:
@@ -1280,7 +1315,7 @@ def extract_artifact_zip(zip_path: Path, staging: Path) -> dict[str, Any]:
                     while chunk := source.read(1024 * 1024):
                         written += len(chunk)
                         if written > CAPTURE_MAX_BYTES:
-                            raise ToolError("artifact ZIP exceeded the 256 MiB bound while extracting")
+                            raise ToolError("artifact ZIP exceeded the 1 GiB bound while extracting")
                         sink.write(chunk)
                 # The replay collector reads the capture as an unrelated mapped UID;
                 # the 0700 state tree above it keeps the files private on the host.
@@ -1411,7 +1446,28 @@ def sync_iteration(state_dir: Path, *, repository: str, since: str, limit: int) 
     """One sync pass: list runs and artifacts, download and import what is new."""
     since_at, until_at = resolve_since(since)
     runs = list_workflow_runs(repository, since_at)
-    artifacts = list_artifacts(repository)
+    # Artifacts are listed per run (the repository-wide listing is unstable;
+    # see list_run_artifacts). Completed runs only: an in-progress run has
+    # no artifacts yet. Runs already processed on an earlier pass are
+    # skipped -- a record for the run's latest attempt means its artifact
+    # was imported or refused, a no-telemetry marker means it had none --
+    # so the steady state only lists runs that are new or re-run.
+    artifacts: list[dict[str, Any]] = []
+    for run in runs:
+        run_id, attempt_no, status = run.get("databaseId"), run.get("attempt") or 1, run.get("status")
+        if not isinstance(run_id, int) or status != "completed":
+            continue
+        run_cache = state_dir / "artifacts" / str(run_id) / str(attempt_no)
+        if (run_cache / "record.json").is_file() or (run_cache / ".no-telemetry").is_file():
+            continue
+        run_artifacts = list_run_artifacts(repository, run_id)
+        if not any(
+            isinstance(a.get("name"), str) and a["name"].startswith(ARTIFACT_NAME_PREFIX) for a in run_artifacts
+        ):
+            run_cache.mkdir(parents=True, exist_ok=True)
+            (run_cache / ".no-telemetry").write_text("")
+            continue
+        artifacts.extend(run_artifacts)
     matched, ignored = find_telemetry_artifacts(runs, artifacts)
     details: list[dict[str, Any]] = list(ignored)
     downloaded = imported = skipped = failed = 0
