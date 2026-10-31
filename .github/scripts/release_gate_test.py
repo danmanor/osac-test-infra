@@ -257,6 +257,96 @@ def test_env_and_k8s_secret_inventory() -> None:
         _assert("user admin" in text, "a short, low-entropy Secret value must not be censored")
 
 
+# A Secret whose name contains its own value (run 41182623253: a Kafka user).
+NAMED_VALUE = "userAb12Cd34"
+NAMED_SECRET = f"svc-kafka-{NAMED_VALUE}"
+
+
+def _named_secret_listing(fx: "Fixture") -> pathlib.Path:
+    document = {"items": [
+        {"metadata": {"namespace": "osac", "name": NAMED_SECRET},
+         "data": {"user": base64.b64encode(NAMED_VALUE.encode()).decode()}},
+    ]}
+    listing = fx.root.parent / "named-secrets.json"
+    listing.write_text(json.dumps(document))
+    return listing
+
+
+def test_a_marker_never_contains_an_inventory_value() -> None:
+    with Fixture() as fx:
+        listing = _named_secret_listing(fx)
+        path = fx.write("a.log", f"connect as {NAMED_VALUE} ok\n")
+        code, _, _ = _run(fx.root, "--k8s-secrets", str(listing))
+        _assert(code == 0, "gate failed")
+        _assert(path.exists(), "file withheld although no value survived (false positive from the marker)")
+        text = path.read_text()
+        _assert(NAMED_VALUE not in text, f"value still present: {text!r}")
+        _assert(text.startswith("connect as [REDACTED:known-value:") and text.endswith("] ok\n"),
+                f"unexpected marker shape: {text!r}")
+        report = json.loads((fx.root / gate.REPORT_NAME).read_text())
+        _assert(report["withheld"] == [], f"unexpected withheld: {report['withheld']}")
+        rules = [c["rule"] for c in report["censored"]]
+        _assert(rules == [f"known-value:secret/osac/{NAMED_SECRET}/user"], f"label lost from the report: {rules}")
+
+
+def test_a_value_next_to_a_marker_is_still_censored() -> None:
+    with Fixture() as fx:
+        listing = _named_secret_listing(fx)
+        marker = f"[REDACTED:known-value:{gate.fingerprint(b'x')}]"
+        path = fx.write("a.log", f"{marker}{NAMED_VALUE}{marker} and {NAMED_VALUE}\n")
+        _run(fx.root, "--k8s-secrets", str(listing))
+        _assert(path.exists(), "file withheld")
+        _assert(NAMED_VALUE not in path.read_text(), "value next to a marker survived")
+
+
+def test_the_base64_marker_hides_the_value_and_keeps_the_file() -> None:
+    with Fixture() as fx:
+        listing = _named_secret_listing(fx)
+        encoded = base64.b64encode(f"x:{NAMED_VALUE}".encode()).decode()
+        path = fx.write("a.log", f"token {encoded}\n")
+        _run(fx.root, "--k8s-secrets", str(listing))
+        _assert(path.exists(), "file withheld")
+        text = path.read_text()
+        _assert(NAMED_VALUE not in text and encoded not in text and ":b64]" in text, f"bad b64 marker: {text!r}")
+
+
+def test_a_real_survivor_is_still_withheld() -> None:
+    with Fixture() as fx:
+        listing = _named_secret_listing(fx)
+        path = fx.write("a.log", f"x {NAMED_VALUE}\n")
+        original = gate.censor_bytes
+
+        def leaky(data: bytes, patterns: "gate.Patterns"):
+            cleaned, hits = original(data, patterns)
+            return cleaned + NAMED_VALUE.encode(), hits  # a value the censor did not reach
+
+        gate.censor_bytes = leaky
+        try:
+            _run(fx.root, "--k8s-secrets", str(listing))
+        finally:
+            gate.censor_bytes = original
+        _assert(not path.exists(), "a file with a surviving value was published")
+        report = json.loads((fx.root / gate.REPORT_NAME).read_text())
+        _assert(len(report["withheld"]) == 1 and "survived" in report["withheld"][0]["reason"],
+                f"survivor not reported: {report}")
+
+
+def test_a_second_run_over_the_output_changes_nothing() -> None:
+    with Fixture() as fx:
+        listing = _named_secret_listing(fx)
+        fx.write("a.log", f"connect as {NAMED_VALUE} ok\n")
+        fx.write("b/c.log", f"{NAMED_VALUE}\n{NAMED_VALUE}\n")
+        elsewhere = fx.root.parent / "report.json"
+        _run(fx.root, "--k8s-secrets", str(listing), "--report", str(elsewhere))
+        first = fx.everything()
+        code, _, _ = _run(fx.root, "--k8s-secrets", str(listing), "--report", str(elsewhere),
+                          "--fail-on-find")
+        _assert(code == 0, "second run found something in the first run's output")
+        _assert(fx.everything() == first, "second run changed the output")
+        report = json.loads(elsewhere.read_text())
+        _assert(report["censored"] == [] and report["withheld"] == [], f"second run reported: {report}")
+
+
 def test_symlink_to_directory_is_removed_and_target_left_alone() -> None:
     with Fixture() as fx:
         outside = fx.root.parent / "outside"
@@ -390,14 +480,14 @@ def test_decompression_bombs_are_abandoned_at_the_limit() -> None:
             zf.writestr("big.txt", zeros)
         samples[f"{label}-member.zip"] = packed.getvalue()
     original = gate.MAX_FILE_BYTES
-    gate.MAX_FILE_BYTES = 4 * 1024 * 1024
     try:
         for name, blob in samples.items():
             with Fixture() as fx:
                 fx.write(name, blob)
                 tracemalloc.start()
                 try:
-                    fx.gate()
+                    # main() sets the limit from this option, so patching the module alone is overridden.
+                    fx.gate("--max-file-mbytes", "4")
                     peak = tracemalloc.get_traced_memory()[1]
                 finally:
                     tracemalloc.stop()
@@ -450,6 +540,11 @@ def main() -> None:
     test_symlink_is_removed()
     test_missing_secret_file_is_skipped_and_empty_one_is_an_error()
     test_env_and_k8s_secret_inventory()
+    test_a_marker_never_contains_an_inventory_value()
+    test_a_value_next_to_a_marker_is_still_censored()
+    test_the_base64_marker_hides_the_value_and_keeps_the_file()
+    test_a_real_survivor_is_still_withheld()
+    test_a_second_run_over_the_output_changes_nothing()
     test_symlink_to_directory_is_removed_and_target_left_alone()
     test_nested_archives_are_withheld()
     test_a_crash_exits_2_never_1()

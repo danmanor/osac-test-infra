@@ -12,7 +12,8 @@ two independent layers so a secret has to evade both:
      pull secret, environment variables, and the data of the cluster's Kubernetes
      Secrets) is searched for in the artifact as read, JSON-escaped and base64
      encoded at every byte alignment. Each hit is replaced with
-     [REDACTED:<name>]; a base64 hit replaces the whole enclosing base64 token.
+     [REDACTED:known-value:<hash of the name>] (the readable name is only in the
+     report, since a name can contain the value); a base64 hit replaces the whole enclosing base64 token.
   2. Shapes. Docker auth entries, private keys, JWTs, Authorization headers,
      well-known provider tokens and password fields are replaced even when no
      known value matches.
@@ -198,6 +199,17 @@ def fingerprint(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()[:10]
 
 
+def _known_marker(label: str, suffix: str = "") -> bytes:
+    """Marker for a known-value hit: a hash of the label, never the label itself.
+
+    A label such as secret/<ns>/<name>/<key> can contain the value it names (a Secret
+    called kafka-user whose "user" is the value), and then the marker would hold a
+    known value and be censored or reported as a survivor. A hash cannot be chosen to
+    contain a value. The report keeps the readable label in its "rule" field.
+    """
+    return _marker(f"known-value:{fingerprint(label.encode('utf-8', 'surrogateescape'))}", suffix)
+
+
 def _marker(name: str, suffix: str = "") -> bytes:
     safe = re.sub(r"[^A-Za-z0-9._:/()\[\]-]", "_", name)
     return f"[REDACTED:{safe}{':' + suffix if suffix else ''}]".encode()
@@ -308,7 +320,7 @@ def censor_known(data: bytes, patterns: Patterns, hits: collections.Counter) -> 
             continue
         if not is_b64:
             hits[f"known-value:{label}"] += data.count(pattern)
-            data = data.replace(pattern, _marker(label))
+            data = data.replace(pattern, _known_marker(label))
             continue
         pieces, position = [], 0
         while (index := data.find(pattern, position)) >= 0:
@@ -317,7 +329,7 @@ def censor_known(data: bytes, patterns: Patterns, hits: collections.Counter) -> 
                 start -= 1
             while end < len(data) and (data[end] in _B64_CHARS or data[end] == _EQUALS):
                 end += 1
-            pieces += [data[position:start], _marker(label, "b64")]
+            pieces += [data[position:start], _known_marker(label, "b64")]
             position = end
             hits[f"known-value:{label}"] += 1
         pieces.append(data[position:])

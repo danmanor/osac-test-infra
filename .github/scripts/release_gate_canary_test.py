@@ -118,6 +118,17 @@ def write_fixtures(base: pathlib.Path) -> pathlib.Path:
     return fixtures
 
 
+def write_e2e_output(base: pathlib.Path) -> pathlib.Path:
+    """What the E2E suites leave in OSAC_E2E_OUTPUT_DIR, with a password the collector must redact."""
+    out = base / "test-output"
+    (out / "failures" / "gw0" / "01-test_a").mkdir(parents=True)
+    (out / "e2e_gw0.log").write_text("2026-01-01 00:00:01 first\n2026-01-01 00:00:03 third\n")
+    (out / "e2e_gw1.log").write_text("2026-01-01 00:00:02 second\n")
+    (out / "results-gw0.jsonl").write_text('{"test": "test_a", "outcome": "failed", "password": "hunter2hunter2"}\n')
+    (out / "failures" / "gw0" / "01-test_a" / "fabric.json").write_text('{"vpc": [], "password": "hunter2hunter2"}')
+    return out
+
+
 def main() -> None:
     for tool in ("bash", "jq"):
         _assert(shutil.which(tool) is not None, f"{tool} is required to run the collector")
@@ -130,12 +141,27 @@ def main() -> None:
 
         collected = base / "collected"
         env = {**os.environ, "PATH": f"{base / 'bin'}{os.pathsep}{os.environ['PATH']}",
-               "FIXTURES": str(fixtures), "KUBECONFIG": str(base / "kubeconfig")}
+               "FIXTURES": str(fixtures), "KUBECONFIG": str(base / "kubeconfig"),
+               "OSAC_E2E_OUTPUT_DIR": str(write_e2e_output(base))}
         result = subprocess.run(["bash", str(COLLECTOR), str(collected)], cwd=REPO, env=env,
                                 capture_output=True, text=True, timeout=300, check=False)
         _assert(result.returncode == 0, f"collector failed: {result.stderr[-400:]}")
         _assert((collected / "mgmt-cluster" / "clusterorders.json").is_file(), "collector produced no ClusterOrder dump")
         _assert((collected / "mgmt-cluster" / "aap-jobs" / "jobs-page-1.json").is_file(), "collector produced no AAP job dump")
+
+        e2e = collected / "e2e"
+        _assert((e2e / "e2e.log").read_text().splitlines()
+                == ["2026-01-01 00:00:01 first", "2026-01-01 00:00:02 second", "2026-01-01 00:00:03 third"],
+                "E2E logs were not merged in time order")
+        _assert("hunter2hunter2" not in (e2e / "results-gw0.jsonl").read_text(), "results-*.jsonl was not redacted")
+        _assert("failed" in (e2e / "results-gw0.jsonl").read_text(), "results-*.jsonl was not collected")
+        fabric = e2e / "failures" / "gw0" / "01-test_a" / "fabric.json"
+        _assert(fabric.is_file() and "hunter2hunter2" not in fabric.read_text(), "failures/ missing or not redacted")
+        missing = subprocess.run(["bash", str(COLLECTOR), str(base / "no-e2e")], cwd=REPO, timeout=300, check=False,
+                                 env={**env, "OSAC_E2E_OUTPUT_DIR": str(base / "does-not-exist")},
+                                 capture_output=True, text=True)
+        _assert(missing.returncode == 0 and not (base / "no-e2e" / "e2e").exists(),
+                "a missing E2E output directory must be skipped without failing")
 
         keep = os.environ.get("RELEASE_GATE_CANARY_KEEP")
         if keep:  # lets a person run another scanner over exactly what the collector wrote
