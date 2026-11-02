@@ -8,11 +8,17 @@ ingress_forward_port: 9444
 # forwarder runs on the lab host, so its primary address is the default.
 ingress_forward_host: "{{ ansible_default_ipv4.address | default('') }}"
 
+# Namespace of the bundled OpenBao. It fetches the Keycloak discovery document
+# itself when the fulfillment service configures a tenant's JWT auth, so it has
+# to resolve the route hostname too.
+ingress_forward_vault_namespace: osac-infra
+
 # Deployments that resolve the Keycloak route hostname and therefore need the
 # host alias. Missing deployments are skipped, so the list can name workloads a
 # smaller deployment profile does not install.
 ingress_forward_alias_deployments:
-  - osac-ui
-  - fulfillment-grpc-server
-  - fulfillment-controller
-  - osac-operator
+  - { namespace: "{{ ingress_forward_vault_namespace }}", name: openbao }
+  - { namespace: "{{ osac_namespace }}", name: osac-ui }
+  - { namespace: "{{ osac_namespace }}", name: fulfillment-grpc-server }
+  - { namespace: "{{ osac_namespace }}", name: fulfillment-controller }
+  - { namespace: "{{ osac_namespace }}", name: osac-operator }

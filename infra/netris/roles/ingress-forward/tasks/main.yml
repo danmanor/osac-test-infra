@@ -171,13 +171,32 @@
     executable: /bin/bash
   environment:
     KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
-    OSAC_NS: "{{ osac_namespace }}"
-    DEPLOYMENT: "{{ item }}"
+    OSAC_NS: "{{ item.namespace }}"
+    DEPLOYMENT: "{{ item.name }}"
     KC_HOST: "{{ _ingress_keycloak_host }}"
     HOST_IP: "{{ ingress_forward_host }}"
   loop: "{{ ingress_forward_alias_deployments }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.name }}"
   register: _ingress_alias
   changed_when: _ingress_alias.stdout | trim == 'changed'
+
+# The alias restarts OpenBao, so it has to be back before the issuer changes
+# restart the fulfillment service, which configures JWT auth against it.
+- name: Wait for the OpenBao rollout
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      if ! oc -n "$VAULT_NS" get deployment openbao >/dev/null 2>&1; then
+        echo skipped
+        exit 0
+      fi
+      oc -n "$VAULT_NS" rollout status deployment/openbao --timeout=300s
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+    VAULT_NS: "{{ ingress_forward_vault_namespace }}"
+  changed_when: false
 
 # --- Issuer consumers that read a ConfigMap or a command flag ---
 
@@ -314,9 +333,11 @@
     executable: /bin/bash
   environment:
     KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
-    OSAC_NS: "{{ osac_namespace }}"
-    DEPLOYMENT: "{{ item }}"
+    OSAC_NS: "{{ item.namespace }}"
+    DEPLOYMENT: "{{ item.name }}"
   loop: "{{ ingress_forward_alias_deployments }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.name }}"
   changed_when: false
 
 # --- Verification ---
@@ -348,7 +369,7 @@
   delay: 10
   changed_when: false
 
-- name: Verify the Keycloak host alias on OSAC workloads
+- name: Verify the Keycloak host alias on OSAC workloads and OpenBao
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
@@ -372,11 +393,13 @@
     executable: /bin/bash
   environment:
     KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
-    OSAC_NS: "{{ osac_namespace }}"
-    DEPLOYMENT: "{{ item }}"
+    OSAC_NS: "{{ item.namespace }}"
+    DEPLOYMENT: "{{ item.name }}"
     KC_HOST: "{{ _ingress_keycloak_host }}"
     HOST_IP: "{{ ingress_forward_host }}"
   loop: "{{ ingress_forward_alias_deployments }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.name }}"
   register: _ingress_alias_check
   changed_when: false
   failed_when: _ingress_alias_check.stdout | trim == 'missing'

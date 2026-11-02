@@ -11,6 +11,7 @@
         'osac-operators',
         'osac-prereqs',
         'osac-kafka',
+        'osac-infra',
         'multicluster-engine',
         'cert-manager',
         'cert-manager-operator',
