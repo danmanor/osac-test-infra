@@ -297,7 +297,13 @@ jobs:
           role-id: ${{ steps.setup.outputs.role-id }}
           secret-id: ${{ steps.setup.outputs.secret-id }}
 
-      - name: Fetch CaaS secrets
+      # The CaaS flow's only use for these is Route 53 record management for
+      # hosted clusters (DNS_CLASS=dns.route53.dns), so it reads the same
+      # Route 53 credential the Netris lab uses -- see
+      # .github/actions/fetch-route53-creds/action.yml for what it can do
+      # (ChangeResourceRecordSets/ListHostedZones/GetChange on the shared
+      # zone). The old aws-credentials path is no longer read by any workflow.
+      - name: Fetch CaaS Route 53 credentials
         id: caas-secrets
         uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4
         with:
@@ -307,8 +313,8 @@ jobs:
           secretId: ${{ steps.setup.outputs.secret-id }}
           exportEnv: false
           secrets: |
-            secret/data/osac/e2e/aws-credentials access_key_id | AWS_ACCESS_KEY_ID ;
-            secret/data/osac/e2e/aws-credentials secret_access_key | AWS_SECRET_ACCESS_KEY
+            secret/data/osac/e2e/caas-route53-credentials access_key_id | AWS_ACCESS_KEY_ID ;
+            secret/data/osac/e2e/caas-route53-credentials secret_access_key | AWS_SECRET_ACCESS_KEY
 
       - name: Prepare cluster environment
         env:
