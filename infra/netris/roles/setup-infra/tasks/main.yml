@@ -113,14 +113,25 @@
     state: directory
     mode: '0755'
 
-# Bypasses get_url's broken CA-cert loading — see comment above
+# Bypasses get_url's broken CA-cert loading — see comment above.
+# Both downloads normally take well under a minute together. The connect
+# timeout and the stall limit (under 1 KiB/s for 120s, exit 28: a stall, not a
+# slow transfer) turn a hung transfer into a timeout that --retry retries;
+# without them one stalled download held the step until its 30-minute timeout.
+# The file is downloaded under a .part name and renamed only on success, so a
+# failed or partial download is never taken for a cached image by `creates`.
 - name: Pre-fetch cloud images via curl
-  ansible.builtin.command:
+  ansible.builtin.shell:
     cmd: >-
-      curl -fSL --retry 5 --retry-delay 5
-      -o "{{ k3s_image_cache_dir }}/../cloud-images/{{ item.name }}"
-      "{{ item.url }}"
-    creates: "{{ k3s_image_cache_dir }}/../cloud-images/{{ item.name }}"
+      curl -fSL --retry 5 --retry-all-errors --retry-delay 5
+      --connect-timeout 30 --speed-limit 1024 --speed-time 120
+      -w 'image-download: %{url_effective} http=%{http_code} ip=%{remote_ip} time=%{time_total}s\n'
+      -o "{{ _image_path }}.part" "{{ item.url }}"
+      && mv -f "{{ _image_path }}.part" "{{ _image_path }}"
+      || { rc=$?; rm -f "{{ _image_path }}.part"; echo "image-download: FAILED {{ item.url }}" >&2; exit "$rc"; }
+    creates: "{{ _image_path }}"
+  vars:
+    _image_path: "{{ k3s_image_cache_dir }}/../cloud-images/{{ item.name }}"
   loop:
     - { url: "{{ cumulus_image_url }}", name: "{{ cumulus_image_name }}" }
     - { url: "{{ ubuntu_image_url }}", name: "{{ ubuntu_image_name }}" }

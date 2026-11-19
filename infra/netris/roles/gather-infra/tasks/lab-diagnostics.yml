@@ -179,6 +179,14 @@
       path: netris/softgates.txt
       argv: [timeout, '120', bash, "{{ role_path }}/../../scripts/softgate-read.sh", '-4 h', '20000']
 
+- name: Capture lab VM first-boot results
+  ansible.builtin.include_tasks: capture-command.yml
+  vars:
+    _gather_lab_command:
+      label: lab boot
+      path: lab-boot.txt
+      argv: [timeout, '120', bash, "{{ role_path }}/../../scripts/lab-boot-read.sh"]
+
 - name: Capture libvirt domain details and XML
   ansible.builtin.include_tasks: capture-command.yml
   loop: "{{ _gather_libvirt_domains_result.stdout_lines | default([]) | reject('equalto', '') | list }}"

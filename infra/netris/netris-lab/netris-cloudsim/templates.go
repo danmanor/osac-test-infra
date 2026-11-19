@@ -529,7 +529,17 @@ runcmd:
     rm -f /etc/resolv.conf
     echo 'nameserver {{ .dnsServer }}' > /etc/resolv.conf
 
-    curl -fsSL https://get.netris.io | sh -s -- --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --node-type softgate_hs --apt-repo $APT_REPO --debug
+    # Download the installer to a file first: piped into sh, a failed download ran
+    # nothing and the softgate rebooted without an agent, with no error anywhere.
+    # The result lands in cloud-init-output.log; a failed download fails cloud-init.
+    if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 30 --max-time 300 \
+        -w 'netris-download: %{url_effective} http=%{http_code} ip=%{remote_ip} time=%{time_total}s\n' \
+        -o /root/netris-install.sh https://get.netris.io; then
+        echo "netris-download: FAILED https://get.netris.io" >&2
+        exit 1
+    fi
+    sh /root/netris-install.sh --lo $MAINIP --controller 10.8.0.2 --ctl-version $VERSION --hostname $HOSTNAME --auth $AUTHKEY --node-type softgate_hs --apt-repo $APT_REPO --debug
+    echo "netris-install: installer exited $?"
 
     # Installer hardcodes DNS to 1.1.1.1 — restore lab DNS
     echo 'nameserver {{ .dnsServer }}' > /etc/resolv.conf
@@ -1058,11 +1068,19 @@ runcmd:
   - [ sh, -c, 'echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf' ]
   - [ sh, -c, 'sysctl -p' ]
   - [ sh, -c, 'iptables-restore < /etc/iptables/rules.v4' ]
-  - [ sh, -c, 'curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ca.crt -o /etc/openvpn/ca.crt' ]
-  - [ sh, -c, 'curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/dh.pem -o /etc/openvpn/dh.pem' ]
-  - [ sh, -c, 'curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myservername.crt -o /etc/openvpn/myservername.crt' ]
-  - [ sh, -c, 'curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/myservername.key -o /etc/openvpn/myservername.key' ]
-  - [ sh, -c, 'curl -sS https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main/ta.key -o /etc/openvpn/ta.key' ]
+  - |
+    # -f so an HTTP error is not saved as the file (OpenVPN then never starts);
+    # each result is logged to cloud-init-output.log. cloud-init joins every runcmd
+    # entry into one /bin/sh script, so an exit here ends all of runcmd: exit only
+    # on failure, when OpenVPN cannot start anyway.
+    base=https://raw.githubusercontent.com/rawfilescloud/ovpn-config-examples/main
+    rc=0
+    for f in ca.crt dh.pem myservername.crt myservername.key ta.key; do
+        curl -fsS --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 30 --max-time 120 \
+            -w 'ovpn-download: %{url_effective} http=%{http_code} ip=%{remote_ip} time=%{time_total}s\n' \
+            -o "/etc/openvpn/$f" "$base/$f" || { echo "ovpn-download: FAILED $base/$f" >&2; rc=1; }
+    done
+    [ "$rc" -eq 0 ] || exit 1
   - [ sh, -c, 'cp /tmp/ovpn-server.conf /etc/openvpn/server.conf' ]
   - [ sh, -c, 'mkdir /etc/openvpn/ccd' ]
   - [ sh, -c, 'echo "ifconfig-push 10.8.0.2 255.255.255.0" > /etc/openvpn/ccd/myclient1' ]
