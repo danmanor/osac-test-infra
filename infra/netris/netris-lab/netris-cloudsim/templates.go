@@ -41,9 +41,10 @@ apt:
       uri: {{ . }}
 {{- end }}
 {{- end }}
+{{- define "aptHost" }}{{ if .aptMirror }}{{ (urlParse .aptMirror).hostname }}{{ else }}archive.ubuntu.com{{ end }}{{ end }}
 {{- define "aptWaitInstallDhclient" }}
   - |
-    apt_host={{ if .aptMirror }}{{ (urlParse .aptMirror).host }}{{ else }}archive.ubuntu.com{{ end }}
+    apt_host={{ template "aptHost" . }}
     i=0
     until getent hosts "$apt_host" >/dev/null; do
         i=$((i + 1))
@@ -64,7 +65,8 @@ apt:
     for i in 1 2 3 4 5; do
         missing=""
         for p in qemu-guest-agent {{ join " " .installedPackages }}; do
-            dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
+            dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -qx 'install ok installed' \
+                || missing="$missing $p"
         done
         [ -z "$missing" ] && break
         echo "apt-retry: installing missing packages:$missing (try $i)" >&2
@@ -233,7 +235,7 @@ runcmd:
             if ping -c 1 {{ .dnsServer }} &> /dev/null; then
                 echo "Internet is accessible."
                 # Check DNS resolution
-                if nslookup archive.ubuntu.com &> /dev/null; then
+                if nslookup {{ template "aptHost" . }} &> /dev/null; then
                     echo "DNS resolution is working."
                     break
                 else
@@ -556,7 +558,7 @@ runcmd:
             if ping -c 1 {{ .dnsServer }} &> /dev/null; then
                 echo "Internet is accessible."
                 # Check DNS resolution
-                if nslookup archive.ubuntu.com &> /dev/null; then
+                if nslookup {{ template "aptHost" . }} &> /dev/null; then
                     echo "DNS resolution is working."
                     break
                 else

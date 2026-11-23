@@ -97,8 +97,9 @@ func shellify(runcmd []interface{}) string {
 // runMgmtRuncmd runs the mgmt-server runcmd as cloud-init would, with every
 // system path moved under a temp dir and every external command stubbed: the
 // stubs append their argv to calls.log; curl writes its -o file, or fails for
-// curlFails. dpkg reports every package installed except those in missing, until
-// apt-get has run once. It returns the script's exit code, its output and calls.log.
+// curlFails. dpkg-query reports every package installed except those in missing,
+// until apt-get has run once; a missing entry "name=status" reports that status
+// (a partial install) and a plain name reports the package as unknown. It returns the script's exit code, its output and calls.log.
 func runMgmtRuncmd(t *testing.T, curlFails bool, missing ...string) (int, string, string, string) {
 	t.Helper()
 	if _, err := exec.LookPath("sh"); err != nil {
@@ -134,13 +135,17 @@ func runMgmtRuncmd(t *testing.T, curlFails bool, missing ...string) (int, string
 		curl += "\n" + `[ -n "$out" ] || exit 2; echo stub > "$out" || exit 23; echo "ovpn-download: stub http=200"`
 	}
 	installed := filepath.Join(root, "apt-installed")
-	dpkg := `[ -f "` + installed + `" ] && exit 0`
+	dpkg := `[ -f "` + installed + `" ] && { printf 'install ok installed'; exit 0; }`
 	for _, p := range missing {
-		dpkg += "\n" + `[ "$2" = "` + p + `" ] && exit 1`
+		if name, status, partial := strings.Cut(p, "="); partial {
+			dpkg += "\n" + `[ "$3" = "` + name + `" ] && { printf '` + status + `'; exit 0; }`
+		} else {
+			dpkg += "\n" + `[ "$3" = "` + p + `" ] && exit 1`
+		}
 	}
 	stubs := map[string]string{
 		"curl": curl, "systemctl": "", "sysctl": "", "iptables-restore": "",
-		"apt-get": `touch "` + installed + `"`, "dpkg": dpkg + "\nexit 0", "sleep": "", "sudo": `"$@"`,
+		"apt-get": `touch "` + installed + `"`, "dpkg-query": dpkg + "\nprintf 'install ok installed'", "sleep": "", "sudo": `"$@"`,
 	}
 	calls := filepath.Join(root, "calls.log")
 	for name, body := range stubs {
@@ -390,7 +395,11 @@ func TestUbuntuCloudInitsUseTheConfiguredMirror(t *testing.T) {
 }
 
 func TestSoftgateWaitsForTheMirrorNameBeforeTheFirstAptUpdate(t *testing.T) {
-	for mirror, host := range map[string]string{"": "archive.ubuntu.com", testAptMirror: "us-east-1.ec2.archive.ubuntu.com"} {
+	for mirror, host := range map[string]string{
+		"":                                   "archive.ubuntu.com",
+		testAptMirror:                        "us-east-1.ec2.archive.ubuntu.com",
+		"http://mirror.internal:8080/ubuntu": "mirror.internal",
+	} {
 		args := sgCloudInitArgs()
 		if mirror != "" {
 			args["aptMirror"] = mirror
@@ -401,6 +410,9 @@ func TestSoftgateWaitsForTheMirrorNameBeforeTheFirstAptUpdate(t *testing.T) {
 		update := strings.Index(script, "apt-get update")
 		if wait < 0 || resolve < wait || update < resolve {
 			t.Fatalf("mirror %q: softgate runcmd must wait for %s to resolve before apt-get update (wait=%d resolve=%d update=%d)", mirror, host, wait, resolve, update)
+		}
+		if !strings.Contains(script, "nslookup "+host+" &>") || strings.Contains(script, "nslookup archive") && host != "archive.ubuntu.com" {
+			t.Errorf("mirror %q: the softgate connectivity wait must look up %s", mirror, host)
 		}
 		if !strings.Contains(script, "apt-get update && apt-get install -y isc-dhcp-client && break") {
 			t.Fatal("the isc-dhcp-client install must be retried")
@@ -423,6 +435,13 @@ func TestMgmtRuncmdReinstallsPackagesCloudInitFailedToInstall(t *testing.T) {
 	}
 	if !strings.Contains(calls, "systemctl start openvpn@server") {
 		t.Fatalf("runcmd must still reach systemctl start openvpn@server, calls:\n%s", calls)
+	}
+}
+
+func TestMgmtRuncmdReinstallsPartlyInstalledPackages(t *testing.T) {
+	_, out, calls, _ := runMgmtRuncmd(t, false, "openvpn=install ok unpacked", "isc-dhcp-server=install ok half-configured")
+	if !strings.Contains(out, "apt-retry: installing missing packages: isc-dhcp-server openvpn (try 1)") {
+		t.Fatalf("unpacked and half-configured packages must be reinstalled, output:\n%s\ncalls:\n%s", out, calls)
 	}
 }
 

@@ -39,8 +39,8 @@
         || echo "vm-boot-report: could not read {{ host.name }} ({{ ip }}), exit $?"
     {% endfor %}
     } | sed -E \
-        -e 's/(--auth[= ]+)[^ ]+/\1<masked>/g' \
-        -e 's/(([Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])[A-Za-z_]*["]?[ ]*[:=][ ]*["]?)[^ ",]+/\1<masked>/g'
+        -e 's/(--auth[= ]+)("[^"]*"|\x27[^\x27]*\x27|[^ ]+)/\1<masked>/g' \
+        -e 's/(([Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])[A-Za-z_]*["\x27]?[ ]*[:=][ ]*)("[^"]*"|\x27[^\x27]*\x27|["\x27]?[^ "\x27,]+)/\1<masked>/g'
   args:
     executable: /bin/bash
   register: _vm_boot_report

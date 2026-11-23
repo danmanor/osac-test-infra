@@ -63,34 +63,45 @@
   loop: "{{ softgates }}"
   changed_when: false
 
-# All softgates are polled together under one deadline (72 x 15s = 18 minutes; a
-# healthy lab needs 5-8). Waiting for them one after another allowed up to 15
-# minutes each, so a stalled softgate ran into the step timeout before any task
-# could say which softgate and which download had stalled. Each poll prints one
-# "<ip> <status>" line per softgate; a softgate whose cloud-init reports an error
-# ends the wait at once. When the wait fails, the boot state of every softgate that
-# is not done is shown.
+# All softgates are polled together under one deadline of 18 minutes (a healthy
+# lab needs 5-8). Waiting for them one after another allowed up to 15 minutes
+# each, so a stalled softgate ran into the step timeout before any task could say
+# which softgate and which download had stalled. The deadline is measured in the
+# shell and bounds each SSH check too, so slow or hung SSH connections cannot
+# stretch the wait. Each poll prints one "<ip> <status>" line per softgate; a
+# softgate whose cloud-init reports an error ends the wait at once. When the wait
+# fails, the boot state of every softgate that is not done is shown.
 - name: Wait for cloud-init to finish on softgates
   block:
     - name: Wait for cloud-init to finish on softgates
       shell: |
-        rc=0
-        for ip in {{ softgates | map(attribute='mgmt_ip') | join(' ') }}; do
-          status=$(ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} \
-            'cloud-init status 2>/dev/null' 2>/dev/null | sed -n 's/^status: //p')
-          echo "${ip} ${status:-unreachable}"
-          case "${status}" in
-            done) ;;
-            error*) rc=2 ;;
-            *) [ "${rc}" -eq 0 ] && rc=1 ;;
-          esac
+        deadline=$((SECONDS + 18 * 60))
+        while :; do
+          rc=0
+          poll=""
+          for ip in {{ softgates | map(attribute='mgmt_ip') | join(' ') }}; do
+            left=$((deadline - SECONDS))
+            [ "${left}" -gt 20 ] && left=20
+            [ "${left}" -lt 1 ] && left=1
+            status=$(timeout "${left}" ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} \
+              'cloud-init status 2>/dev/null' 2>/dev/null | sed -n 's/^status: //p')
+            poll="${poll}${ip} ${status:-unreachable}"$'\n'
+            case "${status}" in
+              done) ;;
+              error*) rc=2 ;;
+              *) [ "${rc}" -eq 0 ] && rc=1 ;;
+            esac
+          done
+          if [ "${rc}" -ne 1 ] || [ "${SECONDS}" -ge "${deadline}" ]; then
+            break
+          fi
+          sleep 15
         done
+        printf '%s' "${poll}"
         exit "${rc}"
+      args:
+        executable: /bin/bash
       register: _sg_cloudinit
-      until: _sg_cloudinit.rc in [0, 2]
-      retries: 72
-      delay: 15
-      failed_when: _sg_cloudinit.rc != 0
       changed_when: false
   rescue:
     - name: Report why cloud-init did not finish on the softgates

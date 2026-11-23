@@ -29,8 +29,8 @@ echo '== packages'; dpkg-query -W -f='\${Package} \${Version} \${db:Status-Abbre
 
 mask() {
     sed -E \
-        -e 's/(--auth[= ]+)[^ ]+/\1<masked>/g' \
-        -e 's/(([Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])[A-Za-z_]*["]?[ ]*[:=][ ]*["]?)[^ ",]+/\1<masked>/g'
+        -e 's/(--auth[= ]+)("[^"]*"|\x27[^\x27]*\x27|[^ ]+)/\1<masked>/g' \
+        -e 's/(([Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])[A-Za-z_]*["\x27]?[ ]*[:=][ ]*)("[^"]*"|\x27[^\x27]*\x27|["\x27]?[^ "\x27,]+)/\1<masked>/g'
 }
 
 # Each read gets its own deadline, well inside gather-infra's 120s for the whole
