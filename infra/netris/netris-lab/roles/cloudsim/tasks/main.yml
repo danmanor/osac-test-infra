@@ -25,6 +25,44 @@
       - "--exclude=.pulumi"
   delegate_to: "{{ inventory_hostname }}"
 
+# The public Ubuntu mirrors stalled the lab VMs' first-boot apt installs on
+# separate EC2 hosts in the same windows; the in-region mirror avoids them.
+- name: Find the EC2 region for the regional Ubuntu mirror
+  when: lab_apt_mirror == 'auto'
+  ansible.builtin.shell: |
+    token=$(curl -fsS --max-time 2 -X PUT http://169.254.169.254/latest/api/token \
+      -H 'X-aws-ec2-metadata-token-ttl-seconds: 60') || exit 0
+    curl -fsS --max-time 2 -H "X-aws-ec2-metadata-token: ${token}" \
+      http://169.254.169.254/latest/meta-data/placement/region || true
+  register: _lab_ec2_region
+  changed_when: false
+
+- name: Check that the EC2 regional Ubuntu mirror answers
+  when:
+    - lab_apt_mirror == 'auto'
+    - _lab_ec2_region.stdout | default('') is match('^[a-z]{2}(-[a-z]+)+-[0-9]+$')
+  ansible.builtin.command: >-
+    curl -fsS -o /dev/null --max-time 20
+    -w 'mirror-check: %{url_effective} http=%{http_code} ip=%{remote_ip} time=%{time_total}s'
+    http://{{ _lab_ec2_region.stdout }}.ec2.archive.ubuntu.com/ubuntu/dists/{{
+    (ubuntu_image_url | regex_search('/releases/[a-z]+/') | default('/releases/noble/', true)).split('/')[2] }}/InRelease
+  register: _lab_mirror_check
+  failed_when: false
+  changed_when: false
+
+- name: Set the lab VM apt mirror
+  ansible.builtin.set_fact:
+    _lab_apt_mirror_url: >-
+      {{ ('http://' ~ _lab_ec2_region.stdout ~ '.ec2.archive.ubuntu.com/ubuntu')
+         if (lab_apt_mirror == 'auto' and (_lab_mirror_check.rc | default(1)) == 0)
+         else ('' if lab_apt_mirror == 'auto' else lab_apt_mirror) }}
+
+- name: Show the lab VM apt mirror
+  ansible.builtin.debug:
+    msg: >-
+      Lab VM apt mirror: {{ _lab_apt_mirror_url or 'the image default (archive.ubuntu.com, security.ubuntu.com)' }}
+      {%- if _lab_mirror_check.stdout is defined %}; {{ _lab_mirror_check.stdout or _lab_mirror_check.stderr }}{% endif %}
+
 - name: Render Pulumi config
   template:
     src: Pulumi.main.yaml.j2

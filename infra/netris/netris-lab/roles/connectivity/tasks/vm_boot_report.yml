@@ -1,0 +1,52 @@
+---
+# Report why lab VMs did not finish setting up, then fail.
+#
+# A wait that gave up only said a service was inactive; the reason (usually a
+# first-boot download that failed or stalled) was in the VM's cloud-init log,
+# collected only at the end of the job. This prints, for each VM, its cloud-init
+# status, the download and apt result lines, the end of cloud-init-output.log and
+# the state and recent journal of the given units, so the failing task names the
+# VM and the download.
+#
+# Variables:
+#   vm_boot_report_reason: why the wait failed (the first line of the failure)
+#   vm_boot_report_hosts:  list of {name, ip} (or {name, mgmt_ip}, as in softgates) to read
+#   vm_boot_report_units:  systemd units to show (default: none)
+#
+# The job log is public: values after --auth and after auth/token/password/secret/key
+# keys are masked with the expressions of scripts/lab-boot-read.sh.
+- name: Read the boot state of the VMs that did not finish setting up
+  ansible.builtin.shell: |
+    remote=$(cat <<'REMOTE'
+    cloud-init status --long 2>&1 | head -12
+    echo '-- download and apt results'
+    grep -h -E 'apt-wait:|apt-retry:|ovpn-download|netris-download|netris-install|curl: \(|Temporary failure|Failed to fetch|^Err:|^E: ' \
+        /var/log/cloud-init-output.log 2>/dev/null | tail -20
+    echo '-- cloud-init-output.log (last 15 lines)'
+    tail -n 15 /var/log/cloud-init-output.log 2>/dev/null
+    {% for unit in vm_boot_report_units | default([]) %}
+    echo "-- {{ unit }}: $(systemctl is-active {{ unit }} 2>&1)"
+    journalctl -u {{ unit }} -b --no-pager -n 10 2>&1
+    {% endfor %}
+    REMOTE
+    )
+    {
+    {% for host in vm_boot_report_hosts %}
+    {% set ip = host.ip | default(host.mgmt_ip) %}
+    echo "===== {{ host.name }} ({{ ip }})"
+    timeout 60 ssh -n -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@{{ ip }} "${remote}" 2>&1 \
+        || echo "vm-boot-report: could not read {{ host.name }} ({{ ip }}), exit $?"
+    {% endfor %}
+    } | sed -E \
+        -e 's/(--auth[= ]+)[^ ]+/\1<masked>/g' \
+        -e 's/(([Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])[A-Za-z_]*["]?[ ]*[:=][ ]*["]?)[^ ",]+/\1<masked>/g'
+  args:
+    executable: /bin/bash
+  register: _vm_boot_report
+  changed_when: false
+  failed_when: false
+
+- name: Fail with the boot state of the VMs that did not finish setting up
+  ansible.builtin.fail:
+    msg: "{{ ([vm_boot_report_reason, ''] + _vm_boot_report.stdout_lines) | join('\n') }}"

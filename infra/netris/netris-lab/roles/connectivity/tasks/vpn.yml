@@ -26,13 +26,27 @@
   shell: ssh-keygen -R 192.168.122.10 2>/dev/null || true
   changed_when: false
 
+# OpenVPN starts at the end of the mgmt-server's cloud-init, after its packages are
+# installed from the internet; a slow mirror can take several minutes. When it
+# never starts, the failure shows the mgmt-server's cloud-init state and downloads.
 - name: Wait for mgmt-server OpenVPN server
-  shell: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@192.168.122.10 "systemctl is-active openvpn@server"
-  register: vpn_server_check
-  until: vpn_server_check.stdout == "active"
-  retries: 30
-  delay: 10
-  changed_when: false
+  block:
+    - name: Wait for mgmt-server OpenVPN server
+      shell: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@192.168.122.10 "systemctl is-active openvpn@server"
+      register: vpn_server_check
+      until: vpn_server_check.stdout == "active"
+      retries: 60
+      delay: 10
+      changed_when: false
+  rescue:
+    - name: Report why OpenVPN did not start on the mgmt-server
+      ansible.builtin.include_tasks: vm_boot_report.yml
+      vars:
+        vm_boot_report_reason: >-
+          openvpn@server on the mgmt-server did not become active in 10 minutes
+          (last state: {{ vpn_server_check.stdout | default('unknown') }})
+        vm_boot_report_hosts: [{name: mgmt-server, ip: 192.168.122.10}]
+        vm_boot_report_units: [openvpn@server]
 
 - name: Fix OpenVPN server topology
   shell: |

@@ -63,25 +63,46 @@
   loop: "{{ softgates }}"
   changed_when: false
 
+# All softgates are polled together under one deadline (72 x 15s = 18 minutes; a
+# healthy lab needs 5-8). Waiting for them one after another allowed up to 15
+# minutes each, so a stalled softgate ran into the step timeout before any task
+# could say which softgate and which download had stalled. Each poll prints one
+# "<ip> <status>" line per softgate; a softgate whose cloud-init reports an error
+# ends the wait at once. When the wait fails, the boot state of every softgate that
+# is not done is shown.
 - name: Wait for cloud-init to finish on softgates
-  shell: |
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{{ item.mgmt_ip }} ' \
-      status=$(cloud-init status 2>/dev/null || true); \
-      case "$status" in \
-        "status: done") exit 0 ;; \
-        "status: error"*) \
-          echo "cloud-init reported an error on this softgate; detailed status follows:"; \
-          cloud-init status --long 2>&1 || true; \
-          exit 2 ;; \
-        *) echo "$status"; exit 1 ;; \
-      esac' 2>&1
-  loop: "{{ softgates }}"
-  register: _sg_cloudinit
-  until: _sg_cloudinit.rc in [0, 2]
-  retries: 60
-  delay: 15
-  failed_when: _sg_cloudinit.rc == 2
-  changed_when: false
+  block:
+    - name: Wait for cloud-init to finish on softgates
+      shell: |
+        rc=0
+        for ip in {{ softgates | map(attribute='mgmt_ip') | join(' ') }}; do
+          status=$(ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} \
+            'cloud-init status 2>/dev/null' 2>/dev/null | sed -n 's/^status: //p')
+          echo "${ip} ${status:-unreachable}"
+          case "${status}" in
+            done) ;;
+            error*) rc=2 ;;
+            *) [ "${rc}" -eq 0 ] && rc=1 ;;
+          esac
+        done
+        exit "${rc}"
+      register: _sg_cloudinit
+      until: _sg_cloudinit.rc in [0, 2]
+      retries: 72
+      delay: 15
+      failed_when: _sg_cloudinit.rc != 0
+      changed_when: false
+  rescue:
+    - name: Report why cloud-init did not finish on the softgates
+      ansible.builtin.include_tasks: vm_boot_report.yml
+      vars:
+        _sg_not_done: >-
+          {{ _sg_cloudinit.stdout_lines | default([]) | reject('search', ' done$')
+             | map('split') | map('first') | list }}
+        vm_boot_report_reason: >-
+          cloud-init did not finish on every softgate in 18 minutes
+          (last poll: {{ _sg_cloudinit.stdout_lines | default([]) | join(', ') }})
+        vm_boot_report_hosts: "{{ softgates | selectattr('mgmt_ip', 'in', _sg_not_done) | list }}"
 
 - name: Restore lab DNS on softgates
   shell: |
@@ -91,24 +112,36 @@
   changed_when: false
 
 - name: Wait for all softgate agents to become active
-  shell: |
-    failed=""
-    for ip in {{ softgates | map(attribute='mgmt_ip') | join(' ') }}; do
-      status=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} "systemctl is-active netris-sg 2>/dev/null" 2>/dev/null)
-      if [ "$status" != "active" ]; then
-        failed="${failed} ${ip}"
-      fi
-    done
-    if [ -n "$failed" ]; then
-      echo "not ready:${failed}"
-      exit 1
-    fi
-    echo "all active"
-  register: _sg_wait
-  until: _sg_wait.rc == 0
-  retries: 20
-  delay: 15
-  changed_when: false
+  block:
+    - name: Wait for all softgate agents to become active
+      shell: |
+        failed=""
+        for ip in {{ softgates | map(attribute='mgmt_ip') | join(' ') }}; do
+          status=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} "systemctl is-active netris-sg 2>/dev/null" 2>/dev/null)
+          if [ "$status" != "active" ]; then
+            failed="${failed} ${ip}"
+          fi
+        done
+        if [ -n "$failed" ]; then
+          echo "not ready:${failed}"
+          exit 1
+        fi
+        echo "all active"
+      register: _sg_wait
+      until: _sg_wait.rc == 0
+      retries: 20
+      delay: 15
+      changed_when: false
+  rescue:
+    - name: Report why the Netris agent is not active on the softgates
+      ansible.builtin.include_tasks: vm_boot_report.yml
+      vars:
+        _sg_not_ready: "{{ (_sg_wait.stdout | default('') | regex_replace('^not ready:', '')).split() }}"
+        vm_boot_report_reason: >-
+          netris-sg did not become active on every softgate in 5 minutes
+          ({{ _sg_wait.stdout | default('no result') }})
+        vm_boot_report_hosts: "{{ softgates | selectattr('mgmt_ip', 'in', _sg_not_ready) | list }}"
+        vm_boot_report_units: [netris-sg]
 
 - name: Wait for XDP on general SoftGates
   ansible.builtin.shell: &xdp_check |

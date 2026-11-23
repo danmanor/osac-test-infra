@@ -173,6 +173,14 @@ ubuntu_image_url: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu
 ubuntu_image_name: "ubuntu-24.04-server-cloudimg-amd64.img"
 libvirt_images_dir: "/var/lib/libvirt/images"
 
+# --- Lab VM apt mirror ---
+# The Ubuntu mirror the lab VMs (mgmt-server, softgates, ISP) install packages from
+# on first boot. "auto" uses the EC2 regional mirror when the lab host is an EC2
+# instance and that mirror answers, and the image's public mirrors otherwise; ""
+# always uses the public mirrors; any other value is the mirror URL to use, e.g.
+# "http://mirror.example.com/ubuntu".
+lab_apt_mirror: auto
+
 # --- Socat port forwarding ---
 controller_service_ports:
   - {name: "grpc", port: 50051}

@@ -13,6 +13,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// mgmtPackages is the mgmt-server's package list in main.go.
+var mgmtPackages = []string{"apache2", "isc-dhcp-server", "iptables-persistent", "openvpn"}
+
 func sgCloudInitArgs() map[string]interface{} {
 	return map[string]interface{}{
 		"hostname":          "softgate",
@@ -94,14 +97,16 @@ func shellify(runcmd []interface{}) string {
 // runMgmtRuncmd runs the mgmt-server runcmd as cloud-init would, with every
 // system path moved under a temp dir and every external command stubbed: the
 // stubs append their argv to calls.log; curl writes its -o file, or fails for
-// curlFails. It returns the script's exit code, its output and calls.log.
-func runMgmtRuncmd(t *testing.T, curlFails bool) (int, string, string, string) {
+// curlFails. dpkg reports every package installed except those in missing, until
+// apt-get has run once. It returns the script's exit code, its output and calls.log.
+func runMgmtRuncmd(t *testing.T, curlFails bool, missing ...string) (int, string, string, string) {
 	t.Helper()
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
 	}
 	args := sgCloudInitArgs()
 	args["hostname"] = "mgmt-server"
+	args["installedPackages"] = mgmtPackages
 	subnet := ipam.IPAM{DefaultGateway: "192.168.122.10", Prefix: "192.168.122.0/24"}
 	subnet.Subnet.Length = 24
 	args["ips"] = []ipam.IPAM{subnet}
@@ -128,9 +133,14 @@ func runMgmtRuncmd(t *testing.T, curlFails bool) (int, string, string, string) {
 	} else {
 		curl += "\n" + `[ -n "$out" ] || exit 2; echo stub > "$out" || exit 23; echo "ovpn-download: stub http=200"`
 	}
+	installed := filepath.Join(root, "apt-installed")
+	dpkg := `[ -f "` + installed + `" ] && exit 0`
+	for _, p := range missing {
+		dpkg += "\n" + `[ "$2" = "` + p + `" ] && exit 1`
+	}
 	stubs := map[string]string{
 		"curl": curl, "systemctl": "", "sysctl": "", "iptables-restore": "",
-		"apt-get": "", "sudo": `"$@"`,
+		"apt-get": `touch "` + installed + `"`, "dpkg": dpkg + "\nexit 0", "sleep": "", "sudo": `"$@"`,
 	}
 	calls := filepath.Join(root, "calls.log")
 	for name, body := range stubs {
@@ -306,5 +316,119 @@ func TestPrepareCloudInitSGGuardsNetworkScriptInBootcmd(t *testing.T) {
 
 	if count := strings.Count(cloudInit[runcmdStart:writeFilesStart], "bash /etc/network_nics_up.sh"); count != 1 {
 		t.Fatalf("network_nics_up.sh invocation count = %d, want 1", count)
+	}
+}
+
+const testAptMirror = "http://us-east-1.ec2.archive.ubuntu.com/ubuntu"
+
+// ubuntuCloudInits renders every Ubuntu VM's user data with the given aptMirror
+// ("" leaves it unset, as when the Pulumi config has no apt_mirror).
+func ubuntuCloudInits(t *testing.T, aptMirror string) map[string]string {
+	t.Helper()
+	args := func() map[string]interface{} {
+		a := sgCloudInitArgs()
+		if aptMirror != "" {
+			a["aptMirror"] = aptMirror
+		}
+		return a
+	}
+	mgmt := args()
+	mgmt["installedPackages"] = mgmtPackages
+	subnet := ipam.IPAM{DefaultGateway: "192.168.122.10", Prefix: "192.168.122.0/24"}
+	subnet.Subnet.Length = 24
+	mgmt["ips"] = []ipam.IPAM{subnet}
+	return map[string]string{
+		"server":       prepareCloudInit(args(), false),
+		"softgate":     prepareCloudInitSG(args(), false),
+		"isp":          prepareCloudInitISP(args(), false),
+		"isp-internal": prepareCloudInitISPInternal(args(), false),
+		"mgmt-server":  prepareCloudInitForMgmt(mgmt, false),
+	}
+}
+
+func aptSection(t *testing.T, name, cloudInit string) map[string]interface{} {
+	t.Helper()
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal([]byte(cloudInit), &doc); err != nil {
+		t.Fatalf("%s: rendered cloud-init is not valid YAML: %v", name, err)
+	}
+	apt, ok := doc["apt"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s: cloud-init has no apt section", name)
+	}
+	return apt
+}
+
+func TestUbuntuCloudInitsMakeAptRetryAndTimeOut(t *testing.T) {
+	for name, cloudInit := range ubuntuCloudInits(t, "") {
+		apt := aptSection(t, name, cloudInit)
+		conf, _ := apt["conf"].(string)
+		for _, want := range []string{`Acquire::Retries "5";`, `Acquire::http::Timeout "30";`, `Acquire::https::Timeout "30";`} {
+			if !strings.Contains(conf, want) {
+				t.Errorf("%s: apt conf must contain %s, got:\n%s", name, want, conf)
+			}
+		}
+		if _, ok := apt["primary"]; ok {
+			t.Errorf("%s: without apt_mirror the image's mirrors must be kept", name)
+		}
+	}
+}
+
+func TestUbuntuCloudInitsUseTheConfiguredMirror(t *testing.T) {
+	for name, cloudInit := range ubuntuCloudInits(t, testAptMirror) {
+		apt := aptSection(t, name, cloudInit)
+		for _, pocket := range []string{"primary", "security"} {
+			entries, _ := apt[pocket].([]interface{})
+			if len(entries) != 1 {
+				t.Fatalf("%s: apt %s must have one entry, got %v", name, pocket, apt[pocket])
+			}
+			if uri := entries[0].(map[string]interface{})["uri"]; uri != testAptMirror {
+				t.Errorf("%s: apt %s uri = %v, want %s", name, pocket, uri, testAptMirror)
+			}
+		}
+	}
+}
+
+func TestSoftgateWaitsForTheMirrorNameBeforeTheFirstAptUpdate(t *testing.T) {
+	for mirror, host := range map[string]string{"": "archive.ubuntu.com", testAptMirror: "us-east-1.ec2.archive.ubuntu.com"} {
+		args := sgCloudInitArgs()
+		if mirror != "" {
+			args["aptMirror"] = mirror
+		}
+		script := shellify(userData(t, prepareCloudInitSG(args, false)))
+		wait := strings.Index(script, "apt_host="+host+"\n")
+		resolve := strings.Index(script, `until getent hosts "$apt_host"`)
+		update := strings.Index(script, "apt-get update")
+		if wait < 0 || resolve < wait || update < resolve {
+			t.Fatalf("mirror %q: softgate runcmd must wait for %s to resolve before apt-get update (wait=%d resolve=%d update=%d)", mirror, host, wait, resolve, update)
+		}
+		if !strings.Contains(script, "apt-get update && apt-get install -y isc-dhcp-client && break") {
+			t.Fatal("the isc-dhcp-client install must be retried")
+		}
+	}
+}
+
+func TestMgmtRuncmdReinstallsPackagesCloudInitFailedToInstall(t *testing.T) {
+	code, out, calls, _ := runMgmtRuncmd(t, false, "openvpn")
+	if !strings.Contains(out, "apt-retry: installing missing packages: openvpn (try 1)") {
+		t.Fatalf("a missing package must be named and reinstalled (exit %d), output:\n%s", code, out)
+	}
+	if strings.Contains(out, "(try 2)") {
+		t.Fatalf("the retry must stop once the packages are installed, output:\n%s", out)
+	}
+	install := strings.Index(calls, "apt-get install -y openvpn")
+	restart := strings.Index(calls, "systemctl restart isc-dhcp-server")
+	if install < 0 || restart < install {
+		t.Fatalf("missing packages must be installed before the services they provide are used, calls:\n%s", calls)
+	}
+	if !strings.Contains(calls, "systemctl start openvpn@server") {
+		t.Fatalf("runcmd must still reach systemctl start openvpn@server, calls:\n%s", calls)
+	}
+}
+
+func TestMgmtRuncmdSkipsTheRetryWhenPackagesAreInstalled(t *testing.T) {
+	_, out, calls, _ := runMgmtRuncmd(t, false)
+	if strings.Contains(out, "apt-retry:") || strings.Contains(calls, "apt-get install") {
+		t.Fatalf("nothing may be reinstalled when every package is present, output:\n%s\ncalls:\n%s", out, calls)
 	}
 }
