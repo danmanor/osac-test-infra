@@ -6,7 +6,9 @@
 # For the mgmt-server (192.168.122.10) and each running ns-softgate-<n> libvirt domain
 # (10.3.3.<n+1>), prints a "=== <name> (<ip>)" header followed by the hostname,
 # `cloud-init status --long`, the download result lines (ovpn-download, netris-download,
-# curl and apt errors) and the tail of /var/log/cloud-init-output.log, the OpenVPN
+# curl and apt errors), the apt sources and how many apt downloads went to each host
+# (which shows whether the VM used the configured mirror), the tail of
+# /var/log/cloud-init-output.log, the OpenVPN
 # server state and the installed openvpn and netris packages. Their first boot
 # downloads packages, OpenVPN certificates and the Netris agent from the internet,
 # and a failed download shows up much later as a service that never started; this
@@ -23,6 +25,8 @@ trap 'rm -rf -- "${work}"' EXIT
 remote="hostname
 echo '== cloud-init status'; cloud-init status --long 2>&1 | head -40
 echo '== download results'; grep -h -E 'ovpn-download|netris-download|netris-install|curl: \\(|Could not resolve|Failed to fetch|Temporary failure|E: ' /var/log/cloud-init-output.log 2>/dev/null | tail -60
+echo '== apt sources'; grep -h -E '^(URIs:|deb )' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list /etc/apt/sources.list 2>/dev/null | sort | uniq -c
+echo '== apt downloads per host'; grep -h -o -E '^(Get|Hit|Ign|Err):[0-9]+ https?://[^ /]+' /var/log/cloud-init-output.log 2>/dev/null | sed -E 's/:[0-9]+ / /' | sort | uniq -c
 echo '== cloud-init output (tail)'; tail -n 120 /var/log/cloud-init-output.log 2>/dev/null
 echo '== openvpn server'; systemctl is-active openvpn@server 2>&1; ls -l /etc/openvpn 2>&1 | head -20
 echo '== packages'; dpkg-query -W -f='\${Package} \${Version} \${db:Status-Abbrev}\n' 'openvpn' 'netris*' 2>&1 | head -20"
