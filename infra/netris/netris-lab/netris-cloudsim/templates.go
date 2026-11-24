@@ -24,7 +24,9 @@ type TmplMapEachDevBlock map[string]interface{}
 //     with an "apt-wait:" prefix.
 //   - "aptRetryMissingPackages" reinstalls what cloud-init's packages step failed
 //     to install: that step logs the failure and goes on, so the mgmt-server
-//     booted without openvpn. Each retry is logged with an "apt-retry:" prefix.
+//     booted without openvpn. The server and softgate run it after the mirror
+//     wait, since their packages step can run before the mirror resolves. Each
+//     retry is logged with an "apt-retry:" prefix.
 const aptTemplate = `
 {{- define "apt" -}}
 apt:
@@ -206,6 +208,7 @@ bootcmd:
 runcmd:
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/runcmd.log' ]
 {{ template "aptWaitInstallDhclient" . }}
+{{ template "aptRetryMissingPackages" . }}
   - [dhclient, -v]
   - |
     #!/bin/bash
@@ -258,7 +261,22 @@ runcmd:
     echo "deb [signed-by=/usr/share/keyrings/netris-public-keyring.gpg] http://repo.netris.ai/repo/ noble {{ .ctlInfo.AptRepo }}" | sudo tee /etc/apt/sources.list.d/netris.list
     # Wait until internet is accessible
     check_connectivity
-    apt-get update && apt-get install -y netris-hnp
+    # The mirror check above can pass while repo.netris.ai does not resolve yet
+    # (a private mirror), so wait for the Netris repository too and retry.
+    i=0
+    until getent hosts repo.netris.ai > /dev/null; do
+        i=$((i + 1))
+        if [ "$i" -ge 60 ]; then
+            echo "apt-wait: repo.netris.ai does not resolve after 5 minutes" >&2
+            break
+        fi
+        sleep 5
+    done
+    for i in 1 2 3 4 5; do
+        apt-get update && apt-get install -y netris-hnp && break
+        echo "apt-retry: netris-hnp install failed (try $i)" >&2
+        sleep 10
+    done
     sudo sed -i '/preserve_hostname: false/c\preserve_hostname: true' /etc/cloud/cloud.cfg
 write_files:
   - path: /root/netris-public.key
@@ -529,6 +547,7 @@ bootcmd:
 runcmd:
   - [ sh, -c, 'echo $(date) | sudo tee -a /root/runcmd.log' ]
 {{ template "aptWaitInstallDhclient" . }}
+{{ template "aptRetryMissingPackages" . }}
   - [dhclient, -v]
   - |
     #!/bin/bash

@@ -454,3 +454,29 @@ func TestMgmtRuncmdSkipsTheRetryWhenPackagesAreInstalled(t *testing.T) {
 		t.Fatalf("nothing may be reinstalled when every package is present, output:\n%s\ncalls:\n%s", out, calls)
 	}
 }
+
+func TestServerAndSoftgateRetryMissingPackagesAfterTheMirrorWait(t *testing.T) {
+	for name, cloudInit := range map[string]string{
+		"server":   prepareCloudInit(sgCloudInitArgs(), false),
+		"softgate": prepareCloudInitSG(sgCloudInitArgs(), false),
+	} {
+		script := shellify(userData(t, cloudInit))
+		wait := strings.Index(script, `until getent hosts "$apt_host"`)
+		retry := strings.Index(script, "apt-retry: installing missing packages:")
+		if wait < 0 || retry < wait {
+			t.Errorf("%s: cloud-init's packages step can run before the mirror resolves, so the missing packages must be retried after the wait (wait=%d retry=%d)", name, wait, retry)
+		}
+		if !strings.Contains(script, "for p in qemu-guest-agent lldpd; do") {
+			t.Errorf("%s: the retry must cover qemu-guest-agent and the configured packages", name)
+		}
+	}
+}
+
+func TestServerWaitsForTheNetrisRepositoryAndRetriesNetrisHnp(t *testing.T) {
+	script := shellify(userData(t, prepareCloudInit(sgCloudInitArgs(), false)))
+	wait := strings.Index(script, "until getent hosts repo.netris.ai")
+	install := strings.Index(script, "apt-get update && apt-get install -y netris-hnp && break")
+	if wait < 0 || install < wait {
+		t.Fatalf("the server must wait for repo.netris.ai before installing netris-hnp, and retry it (wait=%d install=%d)", wait, install)
+	}
+}

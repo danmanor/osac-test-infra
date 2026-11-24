@@ -48,7 +48,7 @@
         -e 's/(--auth[= ]+)[^ ]+/\1<masked>/g' \
         -e "s/${key}(\"([^\"\\\\]|\\\\.)*\"|\\x27([^\\x27\\\\]|\\\\.)*\\x27)/\\1<masked>/g" \
         -e "s/${key}[\"\\x27].*\$/\\1<masked>/" \
-        -e "s/${key}[^ \"\\x27,]+/\\1<masked>/g"
+        -e "s/${key}[^ \"\\x27]+/\\1<masked>/g"
   args:
     executable: /bin/bash
   register: _vm_boot_report

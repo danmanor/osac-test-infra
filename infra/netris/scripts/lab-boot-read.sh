@@ -43,7 +43,7 @@ mask() {
         -e 's/(--auth[= ]+)[^ ]+/\1<masked>/g' \
         -e "s/${key}(\"([^\"\\\\]|\\\\.)*\"|\\x27([^\\x27\\\\]|\\\\.)*\\x27)/\\1<masked>/g" \
         -e "s/${key}[\"\\x27].*\$/\\1<masked>/" \
-        -e "s/${key}[^ \"\\x27,]+/\\1<masked>/g"
+        -e "s/${key}[^ \"\\x27]+/\\1<masked>/g"
 }
 
 # Each read gets its own deadline, well inside gather-infra's 120s for the whole
