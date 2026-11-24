@@ -1,72 +1,137 @@
 ---
-# Verify the lab NFS endpoint from a tenant VM on its default network. The
-# mount and the NAT-address assertion live in the deployed E2E suite; this
-# playbook checks the endpoint itself and then runs the FR5-01 case through the
-# normal harness so the source-address evidence comes from the server log.
-- name: Verify the lab NFS storage endpoint
+# Verify the selected lab storage endpoint. The mount and the NAT-address
+# assertion live in the deployed E2E suite; this playbook checks the endpoint
+# itself and (for the NFS backend) runs the FR5-01 case through the normal
+# harness so the source-address evidence comes from the server log.
+- name: Verify the lab storage endpoint
   hosts: all
   gather_facts: true
   become: true
   tasks:
-    - name: Read the storage endpoint defaults
+    - name: Read the NFS endpoint defaults
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../roles/lab_nfs_storage/defaults/main.yml"
 
-    - name: Wait for the NFS port
-      ansible.builtin.wait_for:
-        host: "{{ lab_nfs_server_ip }}"
-        port: 2049
-        timeout: 30
+    - name: Read the VAST endpoint defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../roles/lab_vast_storage/defaults/main.yml"
 
-    - name: Check the export, NFS version, and client logger
-      ansible.builtin.command:
-        argv:
-          - ssh
-          - -i
-          - "{{ lab_nfs_ssh_key }}"
-          - -o
-          - StrictHostKeyChecking=no
-          - -o
-          - UserKnownHostsFile=/dev/null
-          - "{{ lab_nfs_ssh_user }}@{{ lab_nfs_server_ip }}"
-          - >-
-            exportfs -v && systemctl is-active nfs-server
-            && systemctl is-active osac-nfs-clients
-            && grep -q '+4.1' /proc/fs/nfsd/versions
-      register: _lab_nfs_verify
-      changed_when: false
+    - name: Verify the VAST appliance
+      when: lab_storage_backend | default('nfs') == 'vast'
+      block:
+        - name: Read the VAST domain state
+          ansible.builtin.command:
+            argv: [virsh, domstate, "{{ lab_vast_domain }}"]
+          register: _lab_vast_domain_state
+          changed_when: false
+          failed_when: false
 
-    - name: Report the endpoint
-      ansible.builtin.debug:
-        msg:
-          - "NFS server: {{ lab_nfs_server_ip }}:{{ lab_nfs_export }}"
-          - "Client log: {{ lab_nfs_client_log }}"
-          - "Excluded CIDR: {{ netris_storage_endpoint_cidr }}"
+        - name: Require the VAST domain to be running
+          ansible.builtin.assert:
+            that:
+              - _lab_vast_domain_state.rc == 0
+              - _lab_vast_domain_state.stdout | trim == 'running'
+            fail_msg: >-
+              VAST domain {{ lab_vast_domain }} is not running:
+              {{ _lab_vast_domain_state.stderr | default('') }}
 
-    - name: Check that the deployed suite exists
-      ansible.builtin.stat:
-        path: "{{ osac_dir }}/tests/e2e/networking/storage/test_storage_nat.py"
-      register: _lab_nfs_suite
+        - name: Read the VAST domain disks
+          ansible.builtin.command:
+            argv: [virsh, domblklist, "{{ lab_vast_domain }}", --details]
+          register: _lab_vast_domain_disks
+          changed_when: false
 
-    - name: Run the storage-over-SNAT FR5-01 case
-      when: _lab_nfs_suite.stat.exists
-      ansible.builtin.command:
-        argv:
-          - make
-          - run-tests
-          - INFRA=netris
-          - "DEPLOY_SUITE={{ deploy_suite }}"
-          - TEST_SUITE=storage-nat
-          - "TEST=fr5_01"
-      args:
-        chdir: "{{ playbook_dir }}/../.."
-      register: _lab_nfs_e2e
-      changed_when: _lab_nfs_e2e.rc == 0
+        - name: Require the lab overlay as the VAST boot disk
+          ansible.builtin.assert:
+            that:
+              - lab_vast_overlay in _lab_vast_domain_disks.stdout
+            fail_msg: "VAST domain does not use {{ lab_vast_overlay }}"
 
-    - name: Explain when the suite is not in the checkout
-      when: not _lab_nfs_suite.stat.exists
-      ansible.builtin.debug:
-        msg: >-
-          The storage-over-SNAT suite is not in {{ osac_dir }} yet. The
-          endpoint checks passed; run the suite from an osac checkout that
-          contains tests/e2e/networking/storage/.
+        - name: Read the VAST domain interfaces
+          ansible.builtin.command:
+            argv: [virsh, domiflist, "{{ lab_vast_domain }}"]
+          register: _lab_vast_domain_nics
+          changed_when: false
+
+        - name: Require both VAST NICs on their bridges
+          ansible.builtin.assert:
+            that:
+              - lab_vast_mgmt_bridge in _lab_vast_domain_nics.stdout
+              - lab_vast_bridge in _lab_vast_domain_nics.stdout
+            fail_msg: >-
+              VAST domain must have one NIC on {{ lab_vast_mgmt_bridge }} and one
+              on {{ lab_vast_bridge }}
+
+        - name: Read the VAST domain XML
+          ansible.builtin.command:
+            argv: [virsh, dumpxml, "{{ lab_vast_domain }}"]
+          register: _lab_vast_domain_xml
+          changed_when: false
+
+        - name: Require a virtio boot disk
+          ansible.builtin.assert:
+            that:
+              - "\"bus='virtio'\" in _lab_vast_domain_xml.stdout"
+            fail_msg: "VAST boot disk must be virtio; IDE breaks cluster create"
+
+    - name: Verify the NFS endpoint
+      when: lab_storage_backend | default('nfs') == 'nfs'
+      block:
+        - name: Wait for the NFS port
+          ansible.builtin.wait_for:
+            host: "{{ lab_nfs_server_ip }}"
+            port: 2049
+            timeout: 30
+
+        - name: Check the export, NFS version, and client logger
+          ansible.builtin.command:
+            argv:
+              - ssh
+              - -i
+              - "{{ lab_nfs_ssh_key }}"
+              - -o
+              - StrictHostKeyChecking=no
+              - -o
+              - UserKnownHostsFile=/dev/null
+              - "{{ lab_nfs_ssh_user }}@{{ lab_nfs_server_ip }}"
+              - >-
+                sudo exportfs -v && systemctl is-active nfs-server
+                && systemctl is-active osac-nfs-clients
+                && sudo grep -q '+4.1' /proc/fs/nfsd/versions
+          register: _lab_nfs_verify
+          changed_when: false
+
+        - name: Report the endpoint
+          ansible.builtin.debug:
+            msg:
+              - "NFS server: {{ lab_nfs_server_ip }}:{{ lab_nfs_export }}"
+              - "Client log: {{ lab_nfs_client_log }}"
+              - "Excluded CIDR: {{ netris_storage_endpoint_cidr }}"
+
+        - name: Check that the deployed suite exists
+          ansible.builtin.stat:
+            path: "{{ osac_dir }}/tests/e2e/networking/storage/test_storage_nat.py"
+          register: _lab_nfs_suite
+
+        - name: Run the storage-over-SNAT FR5-01 case
+          when: _lab_nfs_suite.stat.exists
+          ansible.builtin.command:
+            argv:
+              - make
+              - run-tests
+              - INFRA=netris
+              - "DEPLOY_SUITE={{ deploy_suite }}"
+              - TEST_SUITE=storage-nat
+              - "TEST=fr5_01"
+          args:
+            chdir: "{{ playbook_dir }}/../.."
+          register: _lab_nfs_e2e
+          changed_when: _lab_nfs_e2e.rc == 0
+
+        - name: Explain when the suite is not in the checkout
+          when: not _lab_nfs_suite.stat.exists
+          ansible.builtin.debug:
+            msg: >-
+              The storage-over-SNAT suite is not in {{ osac_dir }} yet. The
+              endpoint checks passed; run the suite from an osac checkout that
+              contains tests/e2e/networking/storage/.

@@ -276,9 +276,11 @@ without storage. On this lab the intent is to run it once after `deploy-osac`
 ### Appliance image provenance
 
 `vast_5_4.qcow2` cannot live in git. The role treats it as a documented
-one-time precondition cached at `/home/test/cache/vast/vast_5_4.qcow2`, and
-fails with that path in the message when absent. The copy from a developer
-machine is a one-time step recorded in the run log, not a role task.
+one-time precondition placed at `/var/lib/libvirt/images/vast/vast_5_4.qcow2`
+(the libvirt image directory, so the qemu user can read it; a staging copy
+under `/home/test` is not readable by qemu), and fails with that path in the
+message when absent. The copy from a developer machine is a one-time step
+recorded in the run log, not a role task.
 
 ### Tests (osac mono-repo)
 

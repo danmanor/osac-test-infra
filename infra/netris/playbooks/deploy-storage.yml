@@ -1,7 +1,17 @@
 ---
-- name: Deploy the lab NFS storage endpoint
+# Deploy the lab storage endpoint that the storage-over-SNAT suite uses.
+# Backend-neutral entry point: `-e lab_storage_backend=nfs|vast`.
+- name: Deploy the lab storage endpoint
   hosts: all
   gather_facts: true
   become: true
-  roles:
-    - lab_nfs_storage
+  tasks:
+    - name: Deploy the vendor-neutral NFS endpoint
+      when: lab_storage_backend | default('nfs') == 'nfs'
+      ansible.builtin.include_role:
+        name: lab_nfs_storage
+
+    - name: Deploy the VAST appliance
+      when: lab_storage_backend | default('nfs') == 'vast'
+      ansible.builtin.include_role:
+        name: lab_vast_storage

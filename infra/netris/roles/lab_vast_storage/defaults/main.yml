@@ -1,0 +1,46 @@
+---
+# VAST 5.4 loopback appliance for the Netris lab (OSAC-8073).
+#
+# The appliance runs on the lab host with two NICs: management on the lab
+# management bridge (API/UI/SSH) and data on its own bridge outside the fabric
+# gateway. Tenant workloads reach the VIP pool through the VirtualNetwork
+# NATGateway; the host routes the data range.
+#
+# Inputs (inventory/group_vars/all.yml):
+#   netris_storage_endpoint_enabled   enable the lab storage endpoint
+#   netris_storage_endpoint_cidr      CIDR reserved for the endpoint
+#
+# Outputs:
+#   lab_vast_mgmt_ip                  management/API address
+#   lab_vast_data_ip                  guest data address
+#   lab_vast_pool_range               VIP range for the shared pool
+
+lab_vast_domain: "vast-5-4"
+lab_vast_vcpu: 16
+lab_vast_memory_mib: 131072
+lab_vast_disk_gb: 1024
+lab_vast_image_dir: "/var/lib/libvirt/images/vast"
+lab_vast_base_image: "/var/lib/libvirt/images/vast/vast_5_4.qcow2"
+lab_vast_base_image_sha256: "be2cbdab375760873aa50d2e6a8aca16cf61bc2f4453605b15b4a35ed0186dd7"
+lab_vast_overlay: "{{ lab_vast_image_dir }}/vast_5_4-lab.qcow2"
+lab_vast_build: "release-5-4-1-sp3-2209349"
+lab_vast_autostart: false
+
+# Network
+lab_vast_mgmt_bridge: "br-mgmt"
+lab_vast_bridge: "br-vast"
+lab_vast_bridge_ip: "192.168.124.1/24"
+lab_vast_data_prefix: 24
+lab_vast_mgmt_mac: "52:54:00:5a:54:54"
+lab_vast_data_mac: "52:54:00:5a:54:55"
+lab_vast_mgmt_ip: "192.168.16.60"
+lab_vast_mgmt_prefix: 20
+lab_vast_mgmt_gateway: "192.168.16.1"
+lab_vast_data_ip: "192.168.124.11"
+
+# Guard: VAST needs the recommended 128 GiB profile, and the SNO must not be
+# starved. The role refuses to boot below this floor instead of OOM-killing the
+# cluster mid-run.
+lab_vast_min_free_mem_mb: 65536
+# BMaaS host that must stay off while VAST runs (the lab's spare worker).
+lab_vast_must_stay_off_domain: "hgx-pod00-su0-h03"

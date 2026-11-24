@@ -17,7 +17,7 @@
   `rsync -a --exclude .git --exclude logs --exclude artifacts --exclude config --exclude .env.infra ./ root@rdu-infra-edge-06.ecosys.eng.rdu2.dc.redhat.com:/home/test/osac-test-infra/`
   before every lab run. Never sync `.env.infra`, `config`, `logs`, `artifacts`.
 - VAST: 16 vCPU, 131072 MiB, **virtio-blk** boot disk, 1 TiB qcow2 overlay, loopback cluster, build `release-5-4-1-sp3-2209349`. Never IDE.
-- Base image `/home/test/cache/vast/vast_5_4.qcow2`, sha256 `be2cbdab375760873aa50d2e6a8aca16cf61bc2f4453605b15b4a35ed0186dd7`.
+- Base image `/var/lib/libvirt/images/vast/vast_5_4.qcow2`, sha256 `be2cbdab375760873aa50d2e6a8aca16cf61bc2f4453605b15b4a35ed0186dd7`.
 - Addresses: guest mgmt `192.168.16.60/20` gw `192.168.16.1`; guest data `192.168.124.11/24`, no default route; bridge `br-vast` `192.168.124.1/24`; VIP pool `192.168.124.20`–`192.168.124.23` gw `192.168.124.1` subnet 24 vlan 0; reserved CIDR `192.168.124.0/24`.
 - NAT sources: workload pool `198.51.100.24/29`, BMaaS provisioning `198.51.100.32/29`. Tests must use each tenant's API-reported `default-nat` address; **never hard-code `.25`/`.26`**.
 - No tests in `osac-test-infra` (OSAC-3593). Test code lands in the osac mono-repo only.

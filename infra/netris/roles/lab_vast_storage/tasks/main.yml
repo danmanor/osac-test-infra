@@ -1,0 +1,6 @@
+---
+- name: Prepare the VAST base image and overlay
+  ansible.builtin.import_tasks: image.yml
+
+- name: Define and start the VAST domain
+  ansible.builtin.import_tasks: domain.yml

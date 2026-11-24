@@ -20,6 +20,8 @@ The role in `infra/netris/roles/lab_vast_storage` is written from this record.
 `br-vast` created with NetworkManager: `192.168.124.1/24`, `bridge.stp no`,
 `ipv6.method disabled`.
 
+Ruling: the base image lives in the libvirt image directory, not `/home/test/cache`, because libvirt runs qemu as uid 107 and cannot traverse the 0700 home. A staging copy under `/home/test` is fine only until it is moved.
+
 Note: a portless Linux bridge reports `DOWN` in `ip -br addr` even with the
 address configured. The address is what matters; the link comes up when the
 guest tap is attached. Verification after the VM is defined checks the tap.
@@ -29,7 +31,7 @@ guest tap is attached. Verification after the VM is defined checks the tap.
 | Item | Value |
 |---|---|
 | Source | developer machine `/home/dmanor/Downloads/vast_5_4.qcow2` |
-| Destination | `/home/test/cache/vast/vast_5_4.qcow2` |
+| Destination | `/var/lib/libvirt/images/vast/vast_5_4.qcow2` (libvirt image dir; qemu cannot read `/home/test`, which is 0700) |
 | Virtual size | 1 TiB |
 | File size | 23.2 GiB |
 | sha256 | `be2cbdab375760873aa50d2e6a8aca16cf61bc2f4453605b15b4a35ed0186dd7` |
