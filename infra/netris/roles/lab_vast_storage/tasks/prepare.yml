@@ -1,15 +1,20 @@
 ---
-# The appliance image ships a VMware initramfs with no virtio_blk, so a virtio
-# disk drops the guest into dracut emergency mode. Patch the overlay offline
-# (qemu-nbd + chroot dracut) before the first virtio boot, and write the static
-# network configuration at the same time. Idempotent through a marker file.
+# The appliance image ships a VMware initramfs with no virtio_blk. A fresh
+# overlay that has never booted cannot be fixed by an offline dracut alone
+# (the rebuilt images are there, but the kernel still cannot find the root
+# device). The proven sequence is:
+#   1. write the static network config and dracut add_drivers offline,
+#   2. boot the overlay once on IDE (ata_piix is built in),
+#   3. rebuild the initramfs inside the running guest,
+#   4. shut it down and define it on virtio.
+# A host-side marker keeps this one-time preparation idempotent.
 
 - name: Stat the VAST overlay preparation marker
   ansible.builtin.stat:
     path: "{{ lab_vast_prepared_marker }}"
   register: _lab_vast_prepared
 
-- name: Prepare the VAST overlay for virtio
+- name: Prepare the VAST overlay files offline
   when: not _lab_vast_prepared.stat.exists
   block:
     - name: Load the nbd module with partitions
@@ -81,12 +86,6 @@
         dest: "{{ lab_vast_mount }}/etc/sysctl.d/99-vast-arp.conf"
         mode: "0644"
 
-    - name: Rebuild the initramfs with the virtio drivers
-      ansible.builtin.command:
-        argv: [chroot, "{{ lab_vast_mount }}", dracut, --regenerate-all, --force]
-      register: _lab_vast_dracut
-      changed_when: _lab_vast_dracut.rc == 0
-
     - name: Restore SELinux contexts
       ansible.builtin.command:
         argv:
@@ -97,7 +96,6 @@
           - /etc/sysconfig/network-scripts
           - /etc/sysctl.d
           - /etc/dracut.conf.d
-          - /boot
       changed_when: false
   always:
     - name: Unmount the VAST chroot binds
@@ -119,15 +117,68 @@
       changed_when: false
       failed_when: false
 
+- name: Rebuild the VAST initramfs on a one-time IDE boot
+  when: not _lab_vast_prepared.stat.exists
+  block:
+    - name: Render the IDE preparation domain
+      ansible.builtin.template:
+        src: domain.xml.j2
+        dest: "/tmp/{{ lab_vast_domain }}-prep.xml"
+        mode: "0600"
+      vars:
+        lab_vast_disk_dev: hda
+        lab_vast_disk_bus: ide
+
+    - name: Define the IDE preparation domain
+      ansible.builtin.command:
+        argv: [virsh, define, "/tmp/{{ lab_vast_domain }}-prep.xml"]
+
+    - name: Start the IDE preparation domain
+      ansible.builtin.command:
+        argv: [virsh, start, "{{ lab_vast_domain }}"]
+
+    - name: Wait for the preparation guest SSH
+      ansible.builtin.wait_for:
+        host: "{{ lab_vast_mgmt_ip }}"
+        port: 22
+        timeout: 900
+
+    - name: Rebuild the initramfs inside the running guest
+      ansible.builtin.command:
+        argv:
+          - sshpass
+          - -p
+          - "{{ lab_vast_guest_password }}"
+          - ssh
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - -o
+          - ConnectTimeout=10
+          - "centos@{{ lab_vast_mgmt_ip }}"
+          - sudo dracut --regenerate-all --force
+
+    - name: Shut down the preparation guest
+      ansible.builtin.command:
+        argv: [virsh, shutdown, "{{ lab_vast_domain }}"]
+
+    - name: Wait for the preparation guest to stop
+      ansible.builtin.command:
+        argv: [virsh, domstate, "{{ lab_vast_domain }}"]
+      register: _lab_vast_prep_state
+      until: _lab_vast_prep_state.stdout | trim == 'shut off'
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Remove the preparation domain definition
+      ansible.builtin.command:
+        argv: [virsh, undefine, "{{ lab_vast_domain }}"]
+
 - name: Mark the VAST overlay as prepared
   when: not _lab_vast_prepared.stat.exists
   ansible.builtin.file:
     path: "{{ lab_vast_prepared_marker }}"
     state: touch
     mode: "0644"
-
-- name: Verify the prepared initramfs carries virtio_blk
-  ansible.builtin.assert:
-    that:
-      - _lab_vast_prepared.stat.exists or _lab_vast_dracut.rc == 0
-    fail_msg: "The VAST overlay initramfs was not rebuilt; the guest will not boot on virtio"

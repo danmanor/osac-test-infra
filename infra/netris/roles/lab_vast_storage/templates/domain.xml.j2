@@ -15,7 +15,7 @@
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='none' io='native'/>
       <source file='{{ lab_vast_overlay }}'/>
-      <target dev='vda' bus='virtio'/>
+      <target dev='{{ lab_vast_disk_dev | default("vda") }}' bus='{{ lab_vast_disk_bus | default("virtio") }}'/>
     </disk>
     <interface type='bridge'>
       <mac address='{{ lab_vast_mgmt_mac }}'/>
