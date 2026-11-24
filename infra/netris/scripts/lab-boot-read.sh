@@ -31,11 +31,13 @@ echo '== cloud-init output (tail)'; tail -n 120 /var/log/cloud-init-output.log 2
 echo '== openvpn server'; systemctl is-active openvpn@server 2>&1; ls -l /etc/openvpn 2>&1 | head -20
 echo '== packages'; dpkg-query -W -f='\${Package} \${Version} \${db:Status-Abbrev}\n' 'openvpn' 'netris*' 2>&1 | head -20"
 
-# A quoted value is masked whole, escaped quotes included; a quote that is not
-# closed masks the rest of the line.
+# URL credentials (user:password@, as in an apt mirror URL) are masked. A quoted
+# value is masked whole, escaped quotes included; a quote that is not closed masks
+# the rest of the line.
 key='(([Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])[A-Za-z_]*["\x27]?[ ]*[:=][ ]*)'
 mask() {
     sed -E \
+        -e 's#(://)[^/@ ]+@#\1<masked>@#g' \
         -e 's/(--auth[= ]+)("([^"\\]|\\.)*"|\x27([^\x27\\]|\\.)*\x27)/\1<masked>/g' \
         -e 's/(--auth[= ]+)["\x27].*$/\1<masked>/' \
         -e 's/(--auth[= ]+)[^ ]+/\1<masked>/g' \
