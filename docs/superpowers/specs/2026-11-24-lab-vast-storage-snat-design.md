@@ -139,7 +139,9 @@ Decisions taken with the owner while writing this:
   served by VAST).
 - VAST stays up on this lab, `h03` stays off, storage is on-demand and not in
   scheduled or PR CI.
-- The existing NFS endpoint and suite stay as the vendor-neutral fallback.
+- The vendor-neutral NFS endpoint was retired after the spike: VAST is the only
+  lab storage backend, and the suite talks to it through the same
+  `OSAC_STORAGE_*` variables.
 - Per-tenant VAST tenants and views make isolation real at the storage layer,
   and the matrix includes a cross-tenant mount that must be refused.
 
