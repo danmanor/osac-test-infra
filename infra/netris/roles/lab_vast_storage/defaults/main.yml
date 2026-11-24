@@ -46,6 +46,9 @@ lab_vast_nat_pool_cidr: "198.51.100.0/24"
 lab_vast_dns_servers: ["10.11.5.160", "10.2.32.85"]
 lab_vast_ssh_user: "centos"
 lab_vast_ssh_key: "/root/.ssh/lab-vast"
+# Guest console password from the appliance image; used only for the one-time
+# docker install, ssh-copy-id and the installer. Override in a vaulted var.
+lab_vast_guest_password: "centos"
 lab_vast_admin_user: "admin"
 lab_vast_admin_password: "123456"
 lab_vast_data_iface: "eth1"
