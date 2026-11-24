@@ -1,0 +1,11 @@
+#cloud-config
+hostname: {{ lab_nfs_vm_name }}
+fqdn: {{ lab_nfs_vm_name }}.lab
+manage_etc_hosts: true
+users:
+  - name: {{ lab_nfs_ssh_user }}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - {{ _lab_nfs_pub.content | b64decode | trim }}
