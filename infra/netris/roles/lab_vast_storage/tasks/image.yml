@@ -69,6 +69,12 @@
       - "{{ lab_vast_overlay }}"
       - "{{ lab_vast_disk_gb }}G"
 
+- name: Drop a stale preparation marker with a new overlay
+  when: not _lab_vast_overlay.stat.exists
+  ansible.builtin.file:
+    path: "{{ lab_vast_prepared_marker }}"
+    state: absent
+
 - name: Read the VAST overlay
   ansible.builtin.command:
     argv: [qemu-img, info, -U, --output=json, "{{ lab_vast_overlay }}"]

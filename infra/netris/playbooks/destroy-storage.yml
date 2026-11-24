@@ -1,0 +1,33 @@
+---
+# Tear down the lab storage endpoint without touching the base image or the
+# fabric. Runs before destroy-infra in a full teardown.
+- name: Destroy the lab storage endpoint
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Read the endpoint defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../roles/lab_vast_storage/defaults/main.yml"
+
+    - name: Stop the VAST domain
+      ansible.builtin.command:
+        argv: [virsh, destroy, "{{ lab_vast_domain }}"]
+      changed_when: true
+      failed_when: false
+
+    - name: Undefine the VAST domain
+      ansible.builtin.command:
+        argv: [virsh, undefine, "{{ lab_vast_domain }}"]
+      changed_when: true
+      failed_when: false
+
+    - name: Remove the VAST overlay
+      ansible.builtin.file:
+        path: "{{ lab_vast_overlay }}"
+        state: absent
+
+    - name: Remove the VAST preparation marker
+      ansible.builtin.file:
+        path: "{{ lab_vast_prepared_marker }}"
+        state: absent

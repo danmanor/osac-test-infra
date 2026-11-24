@@ -17,7 +17,7 @@
         file: "{{ playbook_dir }}/../roles/lab_vast_storage/defaults/main.yml"
 
     - name: Verify the VAST appliance
-      when: lab_storage_backend | default('nfs') == 'vast'
+      when: netris_storage_backend | default('nfs') == 'vast'
       block:
         - name: Read the VAST domain state
           ansible.builtin.command:
@@ -74,8 +74,77 @@
               - "\"bus='virtio'\" in _lab_vast_domain_xml.stdout"
             fail_msg: "VAST boot disk must be virtio; IDE breaks cluster create"
 
+        - name: Read the VAST cluster state
+          ansible.builtin.command:
+            argv:
+              - ssh
+              - -i
+              - "{{ lab_vast_ssh_key }}"
+              - -o
+              - StrictHostKeyChecking=no
+              - -o
+              - UserKnownHostsFile=/dev/null
+              - "centos@{{ lab_vast_mgmt_ip }}"
+              - >-
+                curl -sk -u admin:{{ lab_vast_admin_password }}
+                https://{{ lab_vast_mgmt_ip }}/api/clusters/
+                | python3 -c 'import json,sys; print("ONLINE" if any(c.get("state")=="ONLINE" for c in json.load(sys.stdin)) else "PENDING")'
+          register: _lab_vast_verify_cluster
+          changed_when: false
+
+        - name: Require the VAST cluster to be ONLINE
+          ansible.builtin.assert:
+            that:
+              - _lab_vast_verify_cluster.stdout | trim == 'ONLINE'
+            fail_msg: "VAST cluster is not ONLINE"
+
+        - name: Read the VMS management state
+          ansible.builtin.command:
+            argv:
+              - ssh
+              - -i
+              - "{{ lab_vast_ssh_key }}"
+              - -o
+              - StrictHostKeyChecking=no
+              - -o
+              - UserKnownHostsFile=/dev/null
+              - "centos@{{ lab_vast_mgmt_ip }}"
+              - >-
+                curl -sk -u admin:{{ lab_vast_admin_password }}
+                https://{{ lab_vast_mgmt_ip }}/api/latest/vms/
+                | python3 -c 'import json,sys; v=json.load(sys.stdin)[0]; print(v.get("degraded_reason") or "READY")'
+          register: _lab_vast_verify_db
+          changed_when: false
+
+        - name: Require the VMS management database to be ready
+          ansible.builtin.assert:
+            that:
+              - _lab_vast_verify_db.stdout | trim not in ['UPDATING_CLUSTERED_DB', 'NO_NFS_EXPORT']
+            fail_msg: "VMS is not ready: {{ _lab_vast_verify_db.stdout | trim }}"
+
+        - name: Require the VAST client observation
+          ansible.builtin.command:
+            argv:
+              - ssh
+              - -i
+              - "{{ lab_vast_ssh_key }}"
+              - -o
+              - StrictHostKeyChecking=no
+              - -o
+              - UserKnownHostsFile=/dev/null
+              - "centos@{{ lab_vast_mgmt_ip }}"
+              - systemctl is-active osac-vast-clients.service
+          register: _lab_vast_verify_clientlog
+          changed_when: false
+
+        - name: Require the client observation unit to be active
+          ansible.builtin.assert:
+            that:
+              - _lab_vast_verify_clientlog.stdout | trim == 'active'
+            fail_msg: "osac-vast-clients is not active"
+
     - name: Verify the NFS endpoint
-      when: lab_storage_backend | default('nfs') == 'nfs'
+      when: netris_storage_backend | default('nfs') == 'nfs'
       block:
         - name: Wait for the NFS port
           ansible.builtin.wait_for:

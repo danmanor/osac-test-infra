@@ -1,0 +1,122 @@
+---
+# The appliance image ships without docker and with VAST's internal resolvers.
+# The upstream launcher installs docker-ce in the guest and then runs
+# /home/centos/install.sh (which bootstraps VMS and attempts a loopback cluster
+# create). The role does the same, in the guest, once.
+
+- name: Wait for the VAST guest SSH
+  ansible.builtin.wait_for:
+    host: "{{ lab_vast_mgmt_ip }}"
+    port: 22
+    timeout: 900
+
+- name: Generate the lab VAST SSH key when absent
+  ansible.builtin.command:
+    argv: [ssh-keygen, -t, ed25519, -N, "", -f, "{{ lab_vast_ssh_key }}"]
+    creates: "{{ lab_vast_ssh_key }}"
+
+- name: Read the VAST appliance state
+  ansible.builtin.command:
+    argv:
+      - sshpass
+      - -p
+      - "{{ lab_vast_guest_password }}"
+      - ssh
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - >-
+        sudo docker ps --format '{{ '{{' }}.Names{{ '}}' }}' 2>/dev/null
+        | grep -c vast_platform || true
+  register: _lab_vast_platform
+  changed_when: false
+
+- name: Install docker and start the VAST install
+  when: _lab_vast_platform.stdout | trim == '0'
+  block:
+    - name: Install docker and launch the VAST installer
+      ansible.builtin.command:
+        argv:
+          - sshpass
+          - -p
+          - "{{ lab_vast_guest_password }}"
+          - ssh
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - -o
+          - ConnectTimeout=10
+          - "centos@{{ lab_vast_mgmt_ip }}"
+          - sudo bash -s
+        stdin: |
+          set -e
+          grep -q '^ip_resolve=4' /etc/dnf/dnf.conf || echo 'ip_resolve=4' >> /etc/dnf/dnf.conf
+          printf 'search ecosys.eng.rdu2.dc.redhat.com\n%s\n' \
+            "$(printf 'nameserver %s\n' {{ lab_vast_dns_servers | join(' ') }})" > /etc/resolv.conf
+          # The local registry is HTTP. Docker treats 127.0.0.0/8 as insecure,
+          # but the hosts entry may resolve to the management IP instead.
+          python3 - <<'PY'
+          import json, os
+          p = "/etc/docker/daemon.json"
+          d = json.load(open(p)) if os.path.exists(p) else {}
+          regs = set(d.get("insecure-registries", [])) | {
+              "127.0.0.1:5000", "127.0.0.2:5000",
+              "{{ lab_vast_mgmt_ip }}:5000", "vastdata.registry.local:5000"}
+          d["insecure-registries"] = sorted(regs)
+          open(p, "w").write(json.dumps(d, indent=2))
+          PY
+          if ! command -v docker >/dev/null 2>&1; then
+            dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+            dnf install -y docker-ce docker-ce-cli containerd.io
+          fi
+          systemctl enable --now docker
+          systemctl restart docker
+          usermod -aG docker centos
+          if ! docker ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q vast_platform; then
+            nohup sg docker -c 'cd /home/centos && ./install.sh' \
+              > /home/centos/vast-install.log 2>&1 < /dev/null &
+            echo $! > /home/centos/vast-install.pid
+          fi
+
+    - name: Wait for the VAST installer to exit
+      ansible.builtin.command:
+        argv:
+          - sshpass
+          - -p
+          - "{{ lab_vast_guest_password }}"
+          - ssh
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - -o
+          - ConnectTimeout=10
+          - "centos@{{ lab_vast_mgmt_ip }}"
+          - '! pgrep -f "/home/centos/install.sh|bash ./install.sh" >/dev/null'
+      register: _lab_vast_install_done
+      until: _lab_vast_install_done.rc == 0
+      retries: 240
+      delay: 30
+      changed_when: false
+      failed_when: _lab_vast_install_done.rc not in [0, 1]
+
+- name: Install the lab SSH key on the VAST guest
+  ansible.builtin.command:
+    argv:
+      - sshpass
+      - -p
+      - "{{ lab_vast_guest_password }}"
+      - ssh-copy-id
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -i
+      - "{{ lab_vast_ssh_key }}.pub"
+      - "centos@{{ lab_vast_mgmt_ip }}"
+  changed_when: false
