@@ -14,9 +14,11 @@
 #   vm_boot_report_units:  systemd units to show (default: none)
 #
 # The job log is public: values after --auth and after auth/token/password/secret/key
-# keys are masked with the expressions of scripts/lab-boot-read.sh.
+# keys are masked with the expressions of scripts/lab-boot-read.sh: a quoted value
+# whole (escaped quotes included), and an unclosed quote to the end of the line.
 - name: Read the boot state of the VMs that did not finish setting up
   ansible.builtin.shell: |
+    key='(([Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])[A-Za-z_]*["\x27]?[ ]*[:=][ ]*)'
     remote=$(cat <<'REMOTE'
     cloud-init status --long 2>&1 | head -12
     echo '-- download and apt results'
@@ -39,8 +41,12 @@
         || echo "vm-boot-report: could not read {{ host.name }} ({{ ip }}), exit $?"
     {% endfor %}
     } | sed -E \
-        -e 's/(--auth[= ]+)("[^"]*"|\x27[^\x27]*\x27|[^ ]+)/\1<masked>/g' \
-        -e 's/(([Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy])[A-Za-z_]*["\x27]?[ ]*[:=][ ]*)("[^"]*"|\x27[^\x27]*\x27|["\x27]?[^ "\x27,]+)/\1<masked>/g'
+        -e 's/(--auth[= ]+)("([^"\\]|\\.)*"|\x27([^\x27\\]|\\.)*\x27)/\1<masked>/g' \
+        -e 's/(--auth[= ]+)["\x27].*$/\1<masked>/' \
+        -e 's/(--auth[= ]+)[^ ]+/\1<masked>/g' \
+        -e "s/${key}(\"([^\"\\\\]|\\\\.)*\"|\\x27([^\\x27\\\\]|\\\\.)*\\x27)/\\1<masked>/g" \
+        -e "s/${key}[\"\\x27].*\$/\\1<masked>/" \
+        -e "s/${key}[^ \"\\x27,]+/\\1<masked>/g"
   args:
     executable: /bin/bash
   register: _vm_boot_report

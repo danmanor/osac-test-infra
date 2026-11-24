@@ -67,35 +67,42 @@
 # lab needs 5-8). Waiting for them one after another allowed up to 15 minutes
 # each, so a stalled softgate ran into the step timeout before any task could say
 # which softgate and which download had stalled. The deadline is measured in the
-# shell and bounds each SSH check too, so slow or hung SSH connections cannot
-# stretch the wait. Each poll prints one "<ip> <status>" line per softgate; a
-# softgate whose cloud-init reports an error ends the wait at once. When the wait
-# fails, the boot state of every softgate that is not done is shown.
+# shell and bounds each SSH check and each sleep too, so slow or hung SSH
+# connections cannot stretch the wait; once it has passed, no new check starts and
+# a softgate keeps the status of its last check. Each poll prints one
+# "<ip> <status>" line per softgate; a softgate whose cloud-init reports an error
+# ends the wait at once. When the wait fails, the boot state of every softgate
+# that is not done is shown.
 - name: Wait for cloud-init to finish on softgates
   block:
     - name: Wait for cloud-init to finish on softgates
       shell: |
         deadline=$((SECONDS + 18 * 60))
+        declare -A last=()
         while :; do
           rc=0
           poll=""
           for ip in {{ softgates | map(attribute='mgmt_ip') | join(' ') }}; do
             left=$((deadline - SECONDS))
             [ "${left}" -gt 20 ] && left=20
-            [ "${left}" -lt 1 ] && left=1
-            status=$(timeout "${left}" ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} \
-              'cloud-init status 2>/dev/null' 2>/dev/null | sed -n 's/^status: //p')
-            poll="${poll}${ip} ${status:-unreachable}"$'\n'
+            if [ "${left}" -ge 1 ]; then
+              status=$(timeout "${left}" ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ip} \
+                'cloud-init status 2>/dev/null' 2>/dev/null | sed -n 's/^status: //p')
+              last[${ip}]=${status:-unreachable}
+            fi
+            status=${last[${ip}]:-not polled}
+            poll="${poll}${ip} ${status}"$'\n'
             case "${status}" in
               done) ;;
               error*) rc=2 ;;
               *) [ "${rc}" -eq 0 ] && rc=1 ;;
             esac
           done
-          if [ "${rc}" -ne 1 ] || [ "${SECONDS}" -ge "${deadline}" ]; then
+          left=$((deadline - SECONDS))
+          if [ "${rc}" -ne 1 ] || [ "${left}" -le 0 ]; then
             break
           fi
-          sleep 15
+          sleep $((left < 15 ? left : 15))
         done
         printf '%s' "${poll}"
         exit "${rc}"

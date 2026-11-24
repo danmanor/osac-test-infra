@@ -399,6 +399,7 @@ func TestSoftgateWaitsForTheMirrorNameBeforeTheFirstAptUpdate(t *testing.T) {
 		"":                                   "archive.ubuntu.com",
 		testAptMirror:                        "us-east-1.ec2.archive.ubuntu.com",
 		"http://mirror.internal:8080/ubuntu": "mirror.internal",
+		"http://192.168.122.20/ubuntu":       "192.168.122.20",
 	} {
 		args := sgCloudInitArgs()
 		if mirror != "" {
@@ -411,8 +412,10 @@ func TestSoftgateWaitsForTheMirrorNameBeforeTheFirstAptUpdate(t *testing.T) {
 		if wait < 0 || resolve < wait || update < resolve {
 			t.Fatalf("mirror %q: softgate runcmd must wait for %s to resolve before apt-get update (wait=%d resolve=%d update=%d)", mirror, host, wait, resolve, update)
 		}
-		if !strings.Contains(script, "nslookup "+host+" &>") || strings.Contains(script, "nslookup archive") && host != "archive.ubuntu.com" {
-			t.Errorf("mirror %q: the softgate connectivity wait must look up %s", mirror, host)
+		// getent, not nslookup: nslookup does a reverse (PTR) lookup for an IP
+		// mirror, and the wait would never end where that record is missing.
+		if !strings.Contains(script, "getent hosts "+host+" > /dev/null") || strings.Contains(script, "nslookup") {
+			t.Errorf("mirror %q: the softgate connectivity wait must look up %s with getent", mirror, host)
 		}
 		if !strings.Contains(script, "apt-get update && apt-get install -y isc-dhcp-client && break") {
 			t.Fatal("the isc-dhcp-client install must be retried")

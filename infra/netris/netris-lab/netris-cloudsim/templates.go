@@ -235,7 +235,7 @@ runcmd:
             if ping -c 1 {{ .dnsServer }} &> /dev/null; then
                 echo "Internet is accessible."
                 # Check DNS resolution
-                if nslookup {{ template "aptHost" . }} &> /dev/null; then
+                if getent hosts {{ template "aptHost" . }} > /dev/null; then
                     echo "DNS resolution is working."
                     break
                 else
@@ -558,7 +558,7 @@ runcmd:
             if ping -c 1 {{ .dnsServer }} &> /dev/null; then
                 echo "Internet is accessible."
                 # Check DNS resolution
-                if nslookup {{ template "aptHost" . }} &> /dev/null; then
+                if getent hosts {{ template "aptHost" . }} > /dev/null; then
                     echo "DNS resolution is working."
                     break
                 else
