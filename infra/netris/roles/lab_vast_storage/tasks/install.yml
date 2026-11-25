@@ -30,13 +30,13 @@
       - ConnectTimeout=10
       - "centos@{{ lab_vast_mgmt_ip }}"
       - >-
-        sudo docker ps --format '{{ '{{' }}.Names{{ '}}' }}' 2>/dev/null
-        | grep -c vast_platform || true
+        sudo docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' 2>/dev/null
+        | grep -x vast_vms || true
   register: _lab_vast_platform
   changed_when: false
 
 - name: Install docker and start the VAST install
-  when: _lab_vast_platform.stdout | trim == '0'
+  when: _lab_vast_platform.stdout | trim != 'vast_vms'
   block:
     - name: Install docker and launch the VAST installer
       ansible.builtin.command:
