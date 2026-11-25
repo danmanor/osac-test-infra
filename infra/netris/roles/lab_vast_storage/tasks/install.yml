@@ -38,7 +38,9 @@
       [ -x /vast/deploy/vman.sh ] || { echo INCOMPLETE; exit 0; }
       for _ in $(seq 60); do
         if systemctl is-active --quiet docker; then
-          if docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -qx vast_vms; then
+          # The VMS container is removed when the guest shuts down; the
+          # auto-restarting platform containers prove the install is intact.
+          if docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -Eq '^(vast_vms|vast_platform_)'; then
             echo COMPLETE
           else
             echo INCOMPLETE
