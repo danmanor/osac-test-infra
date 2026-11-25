@@ -275,6 +275,15 @@ traffic — the existing WIP hook is reused with the VAST CIDR. The endpoint is
 without storage. On this lab the intent is to run it once after `deploy-osac`
 (a CIDR change later restarts fulfillment; accepted for a lab).
 
+### Browser access to the appliance
+
+The VAST UI must be reachable from a browser on the lab network, the same way
+the OCP ingress (`:9444`) and the Netris controller (`:9443`) are. A local
+systemd `vast-ui-forward.service` runs `socat TCP-LISTEN:9445,fork
+TCP:<mgmt>:443`, so the UI is `https://<lab-host>:9445/` (self-signed;
+appliance admin credentials). `make vast-ui-forward` reconciles it, and
+`deploy-storage` installs it.
+
 ### Appliance image provenance
 
 `vast_5_4.qcow2` cannot live in git. The role treats it as a documented

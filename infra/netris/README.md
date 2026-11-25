@@ -648,6 +648,7 @@ Then browse to `https://osac-ui-osac-devel.apps.ocp-sno.osac.local:9444` (accept
 | OCP Console | `https://console-openshift-console.apps.ocp-sno.osac.local:9444` |
 | Assisted Installer UI | `http://<server-ip>:8080` |
 | Netris Controller | `http://<server-ip>:9443` |
+| VAST UI | `https://<server-ip>:9445` (self-signed; appliance `admin`) |
 
 `make ingress-forward` reconciles the forwarded endpoints on a running cluster. It points Keycloak (`KC_HOSTNAME`) and every issuer consumer at `:9444`, adds a host alias so the UI, fulfillment, operator and bundled OpenBao pods resolve the Keycloak route to the lab host, and allows the forwarded callback on the `osac-ui` Keycloak client. `make deploy-osac` and `make post-install` run it, and it is idempotent.
 

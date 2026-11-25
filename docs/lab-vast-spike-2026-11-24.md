@@ -198,3 +198,10 @@ is refused with the backing-mismatch message, as designed.
 The VMS containers (`vast_vms`, `mcvms`) are removed when the guest shuts down;
 only `registry` and the platform envs have restart policies. The role recreates
 them with `vman.sh start --force` and polls until running.
+
+## Browser access
+
+VAST UI: `https://<lab-host>:9445/` (self-signed; `admin` / `123456`). It is a
+local `vast-ui-forward.service` socat forward to `<mgmt-ip>:443`, the same
+pattern as the OCP ingress (`:9444`) and Netris (`:9443`). Reconcile with
+`make vast-ui-forward`; `deploy-storage` installs it.
