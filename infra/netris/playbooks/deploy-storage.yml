@@ -9,4 +9,4 @@
     - name: Deploy the VAST appliance
       ansible.builtin.include_role:
         name: lab_vast_storage
-      tags: [lab_vast, lab_vast_prepare]
+      tags: [lab_vast, lab_vast_prepare, lab_vast_ui]

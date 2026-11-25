@@ -110,6 +110,10 @@ destroy-storage:
 capture-golden:
 	ansible-playbook playbooks/capture-golden.yml $(ANSIBLE_EXTRA)
 
+# Publish the VAST UI on the lab host (like the OCP ingress on :9444).
+vast-ui-forward:
+	ansible-playbook playbooks/deploy-storage.yml $(ANSIBLE_EXTRA) --tags lab_vast_ui
+
 deploy-ocp:
 	@rm -f .evpn-values.yaml
 	ansible-playbook playbooks/deploy-ocp.yml $(OCP_ANSIBLE_EXTRA)

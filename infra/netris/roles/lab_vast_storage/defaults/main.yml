@@ -66,6 +66,9 @@ lab_vast_admin_user: "admin"
 lab_vast_admin_password: "123456"
 lab_vast_data_iface: "eth1"
 lab_vast_client_log: "/var/log/osac-vast-clients.log"
+# Browser access to the VAST UI, forwarded on the lab host like the OCP ingress
+# (:9444) and the Netris controller (:9443).
+lab_vast_ui_port: 9445
 lab_vast_vip_start: "192.168.124.20"
 lab_vast_vip_end: "192.168.124.23"
 lab_vast_view_path: "/lab-storage"

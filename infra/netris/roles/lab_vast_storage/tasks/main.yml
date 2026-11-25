@@ -23,3 +23,7 @@
 
 - name: Start the VAST client observation
   ansible.builtin.import_tasks: clientlog.yml
+
+- name: Publish the VAST UI on the lab host
+  ansible.builtin.import_tasks: ui_forward.yml
+  tags: [lab_vast_ui]
