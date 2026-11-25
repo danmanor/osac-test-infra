@@ -696,14 +696,14 @@ Inside the guest: `registry` (local image cache), `vast_vms` and `mcvms`
 | Target | What it does |
 |---|---|
 | `make deploy-storage` | Full appliance deploy, or a clone when a golden image exists |
-| `make verify-storage` | Cluster ONLINE, management DB ready, client observation active |
-| `make destroy-storage` | Undefine the domain, remove the deploy overlay and marker (base and golden stay) |
+| `make verify-storage` | Cluster ONLINE, management DB ready, client observation active, NFSv4 lab-tenant export |
+| `make destroy-storage` | Revert `deploy-storage`: undefine the domain, remove the deploy overlay and marker, the UI forward unit and port, `br-vast` and its trusted-zone entry, and the `OSAC_STORAGE_*` lines in `.env.infra` (base and golden stay). `destroy-full` runs it first |
 | `make capture-golden` | Re-check green, stop the VM, flatten the overlay into the golden image |
 | `make vast-ui-forward` | (Re)install the browser forward on `:9445` |
 
 The backend is opt-in: `netris_storage_endpoint_enabled` defaults to `false`,
 so scheduled and PR CI never deploys it. `deploy-storage` writes the endpoint to
-`.env.infra` through `deploy-osac`:
+`.env.infra` (and `deploy-osac` rewrites it while the appliance is running):
 
 ```
 OSAC_STORAGE_NFS_SERVER=192.168.124.20
@@ -740,7 +740,7 @@ After `make verify-storage` is green:
 
 ```bash
 make capture-golden          # stops the VM, ~5 min, 114 GB artifact
-make destroy-storage         # removes only the deploy overlay
+make destroy-storage         # removes the deploy overlay and host wiring, keeps the golden
 make deploy-storage          # clone: ~6 min to verify-storage green
 ```
 
