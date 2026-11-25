@@ -15,7 +15,7 @@
     argv: [ssh-keygen, -t, ed25519, -N, "", -f, "{{ lab_vast_ssh_key }}"]
     creates: "{{ lab_vast_ssh_key }}"
 
-- name: Read the VAST appliance state
+- name: Check whether the VAST install already completed
   ansible.builtin.command:
     argv:
       - sshpass
@@ -30,13 +30,14 @@
       - ConnectTimeout=10
       - "centos@{{ lab_vast_mgmt_ip }}"
       - >-
-        sudo docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' 2>/dev/null
-        | grep -x vast_vms || true
-  register: _lab_vast_platform
+        test -x /vast/deploy/vman.sh &&
+        sudo docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -qx vast_vms
+  register: _lab_vast_installed
   changed_when: false
+  failed_when: false
 
 - name: Install docker and start the VAST install
-  when: _lab_vast_platform.stdout | trim != 'vast_vms'
+  when: _lab_vast_installed.rc != 0
   block:
     - name: Install docker and launch the VAST installer
       ansible.builtin.command:

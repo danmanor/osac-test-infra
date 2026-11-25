@@ -27,7 +27,11 @@
       ip -4 addr show dev lo | grep -q '127.0.0.2' || ip addr add 127.0.0.2/8 dev lo label lo:m
       grep -q '^127.0.0.1[[:space:]]*vastdata.registry.local' /etc/hosts \
         || sed -i 's/^None[[:space:]]*vastdata.registry.local/127.0.0.1 vastdata.registry.local/' /etc/hosts
-      test -x /vast/deploy/vman.sh || cp /vast/bundles/upgrades/{{ lab_vast_build.split('-')[-1] }}/vman.sh /vast/deploy/
+      if [ ! -x /vast/deploy/vman.sh ]; then
+        src=$(find /vast -name vman.sh -not -path '/vast/deploy/*' 2>/dev/null | head -1)
+        [ -n "$src" ] || { echo "vman.sh not found; VAST install is incomplete" >&2; exit 1; }
+        cp "$src" /vast/deploy/vman.sh
+      fi
       docker exec -u root vast_vms python3 -c '
       p="/etc/nginx/nginx.conf"
       s=open(p).read()
