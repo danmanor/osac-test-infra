@@ -35,10 +35,12 @@ clone of it, so a redeploy is minutes.
 - **Capture:** a one-time lab operation, not part of the deploy path. The
   optional `make capture-golden` playbook only exists so the step is repeatable
   and documented; it stops the VM for a consistent capture.
-- **Mechanism:** flatten the green overlay with `qemu-img convert -c` into a
-  standalone golden qcow2; later deploys create an overlay backed by it.
-  Chosen over chained or libvirt-snapshot approaches because it is independent
-  of the base image and has no backing-chain depth.
+- **Mechanism:** flatten the green overlay once with `qemu-img convert` into a
+  standalone golden qcow2 (uncompressed by default; `-c` only when the measured
+  size requires it, since compressed backing makes every post-clone first read
+  decompress); later deploys create an overlay backed by it. Chosen over chained
+  or libvirt-snapshot approaches because it is independent of the base image and
+  has no backing-chain depth.
 
 ## How it works
 
@@ -65,9 +67,15 @@ Artifacts under `/var/lib/libvirt/images/vast/`:
 
 ## Refresh and opt-out
 
-- `lab_vast_use_golden=false` forces the full install path (new identity).
-- Capture a new golden after a green verify with the optional playbook.
-- A stale golden (new build, base image change) is replaced the same way.
+- `lab_vast_use_golden=false` forces the full install path (new identity) **after
+  `destroy-storage`**; an existing overlay keeps its backing, so the role
+  asserts the overlay's backing file and fails with that instruction rather than
+  silently ignoring the flag.
+- Capture a new golden after a green verify with the optional playbook; the
+  playbook re-asserts green itself instead of trusting the previous run.
+- A stale golden (new build, base image change) is replaced the same way. The
+  captured `.meta` records the build, and the role refuses a golden whose build
+  does not match `lab_vast_build`.
 
 ## Risks
 
@@ -76,14 +84,19 @@ Artifacts under `/var/lib/libvirt/images/vast/`:
 | Two clones running simultaneously collide on `192.168.124.11`/VIP | one domain name and one data bridge; documented as sequential-only |
 | A clone inherits test tenants/views from the captured state | capture after a clean verify; tests use unique names; the lab view admits the pool CIDR |
 | Golden drifts from the base image checksum | golden is standalone; base is only needed for a fresh install |
+| Golden drifts from `lab_vast_build` | `.meta` records the build; the role asserts a match and warns when the meta is missing |
 | Capture leaves the VM stopped | the playbook says to run `destroy-storage` then `deploy-storage` |
-| Disk growth (golden + overlay) | `qemu-img convert -c`; host has 2.4 TiB free |
+| Disk growth (golden + overlay) | measured before capture (`du` + `qemu-img info`); uncompressed flatten by default, `-c` only if the measured space requires it |
+| The suite passes on evidence inherited from the golden | the client observation log is truncated when a deploy creates a new overlay, and the suite matches only lines after that baseline |
 
 ## Verification
 
+- Rehearse a cold boot of the overlay itself: containers up, cluster ONLINE, DB
+  ready, no create/format/copy. This is the go/no-go before any capture.
 - Time `deploy-storage` + `verify-storage` on a clone; target < 15 min.
 - `verify-storage` green (cluster ONLINE, DB ready, client log active).
-- Run `test_storage_nat.py -k fr5_01` against the clone.
+- Run `test_storage_nat.py -k fr5_01` against the clone, asserting the client-log
+  line postdates the deploy.
 
 ## Open items (resolved during validation)
 
