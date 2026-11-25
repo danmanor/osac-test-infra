@@ -5,6 +5,26 @@
 # management plane first, then reconcile the cluster state and wait for the
 # management-DB copy (the platform's NFS export is CPU-bound and slow).
 
+- name: Start the VAST containers that a golden clone inherits
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - sudo bash -s
+    stdin: |
+      for c in registry vast_vms mcvms; do
+        docker start "$c" >/dev/null 2>&1 || true
+      done
+  changed_when: false
+
 - name: Ensure the VAST management API is reachable
   ansible.builtin.command:
     argv:

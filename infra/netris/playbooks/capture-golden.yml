@@ -1,0 +1,69 @@
+---
+# Capture the current VAST appliance as a golden image. Run this only after
+# `make verify-storage` is green (cluster ONLINE, management DB ready). The
+# next `make deploy-storage` creates a copy-on-write overlay from the golden
+# image and skips the install, the 1 TiB format and the management-DB copy.
+- name: Capture the VAST golden image
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Read the endpoint defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../roles/lab_vast_storage/defaults/main.yml"
+
+    - name: Require the golden image to differ from the deploy overlay
+      ansible.builtin.assert:
+        that:
+          - lab_vast_golden_image != lab_vast_overlay
+
+    - name: Shut down the VAST domain for a consistent capture
+      ansible.builtin.command:
+        argv: [virsh, shutdown, "{{ lab_vast_domain }}"]
+
+    - name: Wait for the VAST domain to stop
+      ansible.builtin.command:
+        argv: [virsh, domstate, "{{ lab_vast_domain }}"]
+      register: _golden_state
+      until: _golden_state.stdout | trim == 'shut off'
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Flatten the deploy overlay into the golden image
+      ansible.builtin.command:
+        argv:
+          - qemu-img
+          - convert
+          - -O
+          - qcow2
+          - -c
+          - "{{ lab_vast_overlay }}"
+          - "{{ lab_vast_golden_image }}.tmp"
+
+    - name: Move the golden image into place
+      ansible.builtin.command:
+        argv: [mv, "{{ lab_vast_golden_image }}.tmp", "{{ lab_vast_golden_image }}"]
+
+    - name: Check the golden image
+      ansible.builtin.command:
+        argv: [qemu-img, check, "{{ lab_vast_golden_image }}"]
+      changed_when: false
+
+    - name: Record the golden image metadata
+      ansible.builtin.copy:
+        dest: "{{ lab_vast_golden_image }}.meta"
+        mode: "0644"
+        content: |
+          build={{ lab_vast_build }}
+          cluster={{ lab_vast_cluster_name }}
+          vcpu={{ lab_vast_vcpu }}
+          captured={{ ansible_date_time.iso8601 | default('unknown') }}
+          source={{ lab_vast_overlay }}
+
+    - name: Report the capture
+      ansible.builtin.debug:
+        msg:
+          - "Golden image: {{ lab_vast_golden_image }}"
+          - "The VAST domain is stopped. Run: make destroy-storage && make deploy-storage"
+          - "Subsequent deploys are copy-on-write clones and skip install/format/DB copy."

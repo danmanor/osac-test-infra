@@ -20,6 +20,13 @@ lab_vast_base_image: "/var/lib/libvirt/images/vast/vast_5_4.qcow2"
 lab_vast_base_image_sha256: "be2cbdab375760873aa50d2e6a8aca16cf61bc2f4453605b15b4a35ed0186dd7"
 lab_vast_overlay: "{{ lab_vast_image_dir }}/vast_5_4-lab.qcow2"
 lab_vast_prepared_marker: "{{ lab_vast_overlay }}.prepared"
+# Golden image (post-ONLINE snapshot). When it exists and use_golden is true,
+# a new deploy is a copy-on-write clone of it: install, format and the
+# management-DB copy are skipped. Capture it once with `make capture-golden`.
+# Set use_golden=false (or delete the file) to force a fresh install and a new
+# cluster identity.
+lab_vast_golden_image: "{{ lab_vast_image_dir }}/vast_5_4-golden.qcow2"
+lab_vast_use_golden: true
 lab_vast_nbd_device: "/dev/nbd0"
 lab_vast_root_partition: "/dev/nbd0p3"
 lab_vast_mount: "/mnt/vastroot"

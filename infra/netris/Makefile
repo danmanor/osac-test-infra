@@ -106,6 +106,10 @@ verify-storage:
 destroy-storage:
 	ansible-playbook playbooks/destroy-storage.yml $(ANSIBLE_EXTRA)
 
+# After a green verify-storage: capture the appliance so later deploys clone it.
+capture-golden:
+	ansible-playbook playbooks/capture-golden.yml $(ANSIBLE_EXTRA)
+
 deploy-ocp:
 	@rm -f .evpn-values.yaml
 	ansible-playbook playbooks/deploy-ocp.yml $(OCP_ANSIBLE_EXTRA)
@@ -397,7 +401,7 @@ health-check:
 # ─── .PHONY ────────────────────────────────────────────────────────
 
 .PHONY: deploy \
-        deploy-setup setup-infra deploy-infra deploy-storage verify-storage destroy-storage deploy-ocp deploy-osac _check-osac-images \
+        deploy-setup setup-infra deploy-infra deploy-storage verify-storage destroy-storage capture-golden deploy-ocp deploy-osac _check-osac-images \
         setup-caas deploy-caas setup-vmaas gather-vmaas destroy-vmaas \
         test-caas-networking test-caas_networking test-maas-networking test-maas_networking \
         prepare-suite deploy-suite \

@@ -158,3 +158,20 @@ Candidate levers, strongest first:
    SSD/NVRAM drives) if the platform accepts it — directly cuts the format.
 5. Keep 32 vCPU (done) and add an iothread/multiqueue if the block path ever
    becomes the limiter.
+
+## Golden image (fast redeploys)
+
+`make capture-golden` flattens the deploy overlay (after `verify-storage` is
+green) into `/var/lib/libvirt/images/vast/vast_5_4-golden.qcow2`. With
+`lab_vast_use_golden: true` (default), `make deploy-storage` then creates a
+copy-on-write overlay **backed by the golden image** and skips:
+
+- the 1 TiB loopback format (~30-50 min),
+- `install.sh` / image import (~20-40 min),
+- the management-DB copy and replication catch-up (~35 min at 32 vCPU).
+
+The clone keeps the captured cluster identity (GUID, SSH host keys, DB). That
+is acceptable for a single sequential lab; set `lab_vast_use_golden=false` (or
+delete the golden image) when a fresh identity is required. Containers do not
+autostart in the guest, so `cluster.yml` starts `registry`, `vast_vms` and
+`mcvms` before repairing the management plane.

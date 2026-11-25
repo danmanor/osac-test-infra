@@ -49,6 +49,21 @@
     state: file
     mode: "0644"
 
+- name: Stat the VAST golden image
+  ansible.builtin.stat:
+    path: "{{ lab_vast_golden_image }}"
+  register: _lab_vast_golden
+  when: lab_vast_use_golden | bool
+
+- name: Choose the overlay backing image
+  ansible.builtin.set_fact:
+    _lab_vast_backing: >-
+      {{ lab_vast_golden_image
+         if (lab_vast_use_golden | bool and _lab_vast_golden.stat.exists | default(false))
+         else lab_vast_base_image }}
+    _lab_vast_from_golden: >-
+      {{ lab_vast_use_golden | bool and (_lab_vast_golden.stat.exists | default(false)) }}
+
 - name: Stat the VAST overlay
   ansible.builtin.stat:
     path: "{{ lab_vast_overlay }}"
@@ -65,15 +80,16 @@
       - -F
       - qcow2
       - -b
-      - "{{ lab_vast_base_image }}"
+      - "{{ _lab_vast_backing }}"
       - "{{ lab_vast_overlay }}"
       - "{{ lab_vast_disk_gb }}G"
 
-- name: Drop a stale preparation marker with a new overlay
-  when: not _lab_vast_overlay.stat.exists
+- name: Record the backing file of the new overlay
   ansible.builtin.file:
     path: "{{ lab_vast_prepared_marker }}"
-    state: absent
+    state: "{{ 'touch' if _lab_vast_from_golden | bool else 'absent' }}"
+    mode: "0644"
+  when: not _lab_vast_overlay.stat.exists
 
 - name: Read the VAST overlay
   ansible.builtin.command:

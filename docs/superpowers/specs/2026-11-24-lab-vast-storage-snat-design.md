@@ -366,6 +366,14 @@ so removing VAST never leaves the suite without an endpoint.
 6. How long does creating the CaaS cluster and BMaaS host take on this lab
    before the matrix can run, and does the CaaS worker fit alongside VAST?
 
+## Fast redeploys (golden image)
+
+The appliance's cost is dominated by the loopback format and the management-DB
+copy, both CPU-bound (~2 h at 32 vCPU). `make capture-golden` flattens a green
+deploy into a golden qcow2; later deploys are copy-on-write clones that skip
+install, format and DB copy. The trade-off is a cloned cluster identity, which
+is fine for one sequential lab and is opt-out via `lab_vast_use_golden=false`.
+
 ## What is left to the builder
 
 - Exact domain XML details (machine type, PCI slots, CPU model) within the
