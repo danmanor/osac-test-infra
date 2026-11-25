@@ -39,6 +39,9 @@
       done
       docker ps -a --format '{{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.State{{ '}}' }}'
   register: _lab_vast_containers
+  until: "'vast_vms running' in _lab_vast_containers.stdout_lines"
+  retries: 60
+  delay: 5
   changed_when: false
 
 # A wrong container name or a dead dockerd must fail here, not after the
