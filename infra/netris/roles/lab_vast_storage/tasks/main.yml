@@ -18,5 +18,8 @@
 - name: Create the VAST lab objects
   ansible.builtin.import_tasks: objects.yml
 
+- name: Align the VAST VIP policy routing
+  ansible.builtin.import_tasks: vip_routes.yml
+
 - name: Start the VAST client observation
   ansible.builtin.import_tasks: clientlog.yml
