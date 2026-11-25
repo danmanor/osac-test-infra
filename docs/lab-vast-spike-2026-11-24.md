@@ -175,3 +175,26 @@ is acceptable for a single sequential lab; set `lab_vast_use_golden=false` (or
 delete the golden image) when a fresh identity is required. Containers do not
 autostart in the guest, so `cluster.yml` starts `registry`, `vast_vms` and
 `mcvms` before repairing the management plane.
+
+## Golden clone results (2026-11-25)
+
+| Phase | Full install | Golden clone |
+|---|---|---|
+| Image copy / prep | ~1.5 h (one-time) | — |
+| `install.sh` | ~40 min | skipped |
+| ACTIVATING (1 TiB format) | ~52 min | skipped |
+| Management-DB copy | ~35 min | skipped |
+| Cold boot → SSH | — | 20 s |
+| dockerd | — | 20 s |
+| VMS container (recreated by vman) | — | 32 s |
+| API HTTP 200 | — | 107 s |
+| **`deploy-storage` + `verify-storage` green** | **~2.5 h** | **6m12s** |
+
+Cold boot through the role: containers match the pre-boot inventory exactly,
+domain UUID preserved (`7e9b1e05-...`). Warm re-run: green, no reinstall, no
+create. `EXTRA_VARS=lab_vast_use_golden=false` against a golden-backed overlay
+is refused with the backing-mismatch message, as designed.
+
+The VMS containers (`vast_vms`, `mcvms`) are removed when the guest shuts down;
+only `registry` and the platform envs have restart policies. The role recreates
+them with `vman.sh start --force` and polls until running.
