@@ -5,7 +5,10 @@
 # management plane first, then reconcile the cluster state and wait for the
 # management-DB copy (the platform's NFS export is CPU-bound and slow).
 
-- name: Start the VAST containers that a golden clone inherits
+# A cold boot brings back only the containers with a restart policy (the
+# platform envs and the local registry). The VMS containers are removed on
+# shutdown, so they must be recreated by vman, not `docker start`.
+- name: Recreate and start the VAST containers
   ansible.builtin.command:
     argv:
       - ssh
@@ -18,9 +21,15 @@
       - -o
       - ConnectTimeout=10
       - "centos@{{ lab_vast_mgmt_ip }}"
-      - sudo bash -s
+      - bash -s
     stdin: |
       for _ in $(seq 60); do systemctl is-active --quiet docker && break; sleep 5; done
+      if ! docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -qx vast_vms; then
+        cd /vast/deploy
+        EXTRA_VOLUME_MOUNTS='-v /file_server:/file_server' \
+        DISABLE_IPV6_FOR_LOOPBACK=yes \
+          sg docker -c './vman.sh {{ lab_vast_build }} /vast/deploy/ssh_key.pem start --force'
+      fi
       for c in registry vast_vms mcvms; do
         docker start "$c" >/dev/null 2>&1 || true
       done
