@@ -73,6 +73,23 @@
            -d "{\"name\":\"lab-storage\",\"path\":\"{{ lab_vast_view_path }}\",\"policy_id\":$POLICY_ID,\"tenant_id\":$TENANT_ID,\"protocols\":[\"NFS\"]}" \
            -o /dev/null -w 'view create %{http_code}\n'
 
+      # The appliance's root view is not writable with capacity 0, and the
+      # policy must allow the lab NAT range without root squash for the write
+      # probe. Both are idempotent and re-applied after every clone.
+      VID=$(api "$V/api/latest/views/" | python3 -c '
+      import json,sys
+      d=json.load(sys.stdin)
+      m=[x for x in d if x["path"]=="{{ lab_vast_view_path }}"]
+      print(m[0]["id"] if m else 0)')
+      if [ "$VID" != 0 ]; then
+        api -X PUT "$V/api/latest/views/$VID/" -H 'Content-Type: application/json' \
+          -d "{\"path\":\"{{ lab_vast_view_path }}\",\"policy_id\":$POLICY_ID,\"logical_capacity\":{{ lab_vast_view_capacity_bytes }},\"physical_capacity\":{{ lab_vast_view_capacity_bytes }}}" \
+          -o /dev/null -w 'view capacity %{http_code}\n'
+      fi
+      api -X PATCH "$V/api/latest/viewpolicies/$POLICY_ID/" -H 'Content-Type: application/json' \
+        -d "{\"nfs_read_write\":[\"{{ lab_vast_nat_pool_cidr }}\"],\"nfs_root_squash\":[],\"nfs_no_squash\":[\"{{ lab_vast_nat_pool_cidr }}\"]}" \
+        -o /dev/null -w 'policy access %{http_code}\n'
+
       api "$V/api/latest/vippools/" | python3 -c '
       import json,sys
       d=json.load(sys.stdin)

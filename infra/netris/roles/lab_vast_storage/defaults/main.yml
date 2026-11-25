@@ -71,7 +71,9 @@ lab_vast_client_log: "/var/log/osac-vast-clients.log"
 lab_vast_ui_port: 9445
 lab_vast_vip_start: "192.168.124.20"
 lab_vast_vip_end: "192.168.124.23"
-lab_vast_view_path: "/lab-storage"
+lab_vast_view_path: "/"
+# Root-view capacity for the stage-1 write probe (logical and physical).
+lab_vast_view_capacity_bytes: 214748364800
 
 # Guard: the SNO must not be starved. The role refuses to boot below this floor
 # instead of OOM-killing the cluster mid-run.
