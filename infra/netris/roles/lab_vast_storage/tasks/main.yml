@@ -18,6 +18,9 @@
 - name: Create the VAST lab objects
   ansible.builtin.import_tasks: objects.yml
 
+- name: Mount the export inside the appliance for the server-side read
+  ansible.builtin.import_tasks: server_view.yml
+
 - name: Align the VAST VIP policy routing
   ansible.builtin.import_tasks: vip_routes.yml
 

@@ -790,6 +790,11 @@ https://<lab-host>:9445/     # self-signed; admin / 123456
   and `verify-storage` checks them.
 - Mount from a tenant guest:
   `mount -t nfs -o vers=4.1,noresvport 192.168.124.20:/lab-storage /mnt`.
+- The appliance mounts that export read-only at the same path
+  (`lab-storage.mount`): the suite proves the probe file reached the export by
+  reading it on the storage server, and VAST has no local path for a view. The
+  data subnet is therefore a read-only client of the lab tenant, while the
+  SNAT range keeps the write access.
 - Sequential use only: one clone at a time (same MACs, addresses, VIPs, UUID).
 
 ## How deploy-ocp Works

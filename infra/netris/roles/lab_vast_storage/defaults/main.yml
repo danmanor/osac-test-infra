@@ -46,6 +46,10 @@ lab_vast_mgmt_bridge: "br-mgmt"
 lab_vast_bridge: "br-vast"
 lab_vast_bridge_ip: "192.168.124.1/24"
 lab_vast_data_prefix: 24
+# The appliance's own data subnet, as VAST client IPs: it reads the export back
+# for the suite's server-side check, read-only, over the VIP.
+lab_vast_data_subnet_start: "192.168.124.0"
+lab_vast_data_subnet_end: "192.168.124.255"
 lab_vast_mgmt_mac: "52:54:00:5a:54:54"
 lab_vast_data_mac: "52:54:00:5a:54:55"
 lab_vast_mgmt_ip: "192.168.16.60"

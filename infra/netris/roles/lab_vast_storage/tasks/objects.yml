@@ -31,7 +31,7 @@
       print(t[0]["id"] if t else 0)')
       if [ "$TENANT_ID" = 0 ]; then
         api -X POST "$V/api/latest/tenants/" -H 'Content-Type: application/json' \
-          -d '{"name":"lab","client_ip_ranges":[["198.51.100.24","198.51.100.31"]]}' \
+          -d '{"name":"lab","client_ip_ranges":[["198.51.100.24","198.51.100.31"],["{{ lab_vast_data_subnet_start }}","{{ lab_vast_data_subnet_end }}"]]}' \
           -o /dev/null -w 'tenant create %{http_code}\n'
         TENANT_ID=$(api "$V/api/latest/tenants/" | python3 -c '
       import json,sys
@@ -73,8 +73,16 @@
       }
 
       write -X PATCH "$V/api/latest/viewpolicies/$POLICY_ID/" -H 'Content-Type: application/json' \
-        -d "{\"nfs_read_write\":[\"{{ lab_vast_nat_pool_cidr }}\"],\"nfs_root_squash\":[],\"nfs_no_squash\":[\"{{ lab_vast_nat_pool_cidr }}\"]}"
+        -d "{\"nfs_read_write\":[\"{{ lab_vast_nat_pool_cidr }}\"],\"nfs_read_only\":[\"{{ lab_vast_data_subnet_start }}/{{ lab_vast_data_prefix }}\"],\"nfs_root_squash\":[],\"nfs_no_squash\":[\"{{ lab_vast_nat_pool_cidr }}\"]}"
       echo "policy access ok"
+
+      # The appliance itself reads the export to serve the suite's server-side
+      # check (the probe file must exist on the export, not only in the guest).
+      # It reaches the VIP from the data subnet, so that subnet is a lab-tenant
+      # client too, read-only; the SNAT range above keeps the write access.
+      write -X PATCH "$V/api/latest/tenants/$TENANT_ID/" -H 'Content-Type: application/json' \
+        -d "{\"client_ip_ranges\":[[\"198.51.100.24\",\"198.51.100.31\"],[\"{{ lab_vast_data_subnet_start }}\",\"{{ lab_vast_data_subnet_end }}\"]]}"
+      echo "tenant access ok"
 
       # "NFS" in a view's protocols is NFSv3 only; NFSv4.1/4.2 is "NFS4". An
       # NFSv4 export also needs NFSv4 on every view above it, including the
@@ -95,7 +103,7 @@
       # so VAST serves the SNAT clients only views of that tenant. A view needs
       # an existing path; create the directory first (ALREADY_EXISTS is fine).
       api -X POST "$V/api/latest/folders/create_folder/" -H 'Content-Type: application/json' \
-        -d "{\"path\":\"{{ lab_vast_view_path }}\",\"tenant_id\":$TENANT_ID,\"create_dir_mode\":511}" \
+        -d "{\"path\":\"{{ lab_vast_view_path }}\",\"tenant_id\":$TENANT_ID,\"create_dir_mode\":755}" \
         -o /tmp/lab-vast-api.out -w 'folder create %{http_code}\n'
       grep -q -e '"OK"' -e ALREADY_EXISTS /tmp/lab-vast-api.out \
         || { echo "folder create failed: $(cat /tmp/lab-vast-api.out)" >&2; exit 1; }
