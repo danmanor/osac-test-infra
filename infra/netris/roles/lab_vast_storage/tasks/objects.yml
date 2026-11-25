@@ -65,30 +65,54 @@
       print([x["id"] for x in d if x["name"]=="lab-policy"][0])')
       fi
 
-      api "$V/api/latest/views/" | python3 -c '
-      import json,sys
-      d=json.load(sys.stdin)
-      raise SystemExit(0 if [x for x in d if x.get("path")=="{{ lab_vast_view_path }}"] else 1)' \
-      || api -X POST "$V/api/latest/views/" -H 'Content-Type: application/json' \
-           -d "{\"name\":\"lab-storage\",\"path\":\"{{ lab_vast_view_path }}\",\"policy_id\":$POLICY_ID,\"tenant_id\":$TENANT_ID,\"protocols\":[\"NFS\"]}" \
-           -o /dev/null -w 'view create %{http_code}\n'
+      # Writes must succeed: a rejected PATCH (for example a policy from another
+      # tenant) used to print its status code and go unnoticed.
+      write() {
+        code=$(api -o /tmp/lab-vast-api.out -w '%{http_code}' "$@")
+        case "$code" in 2??) ;; *) echo "VAST API $code: $(cat /tmp/lab-vast-api.out)" >&2; exit 1 ;; esac
+      }
 
-      # The appliance's root view is not writable with capacity 0, and the
-      # policy must allow the lab NAT range without root squash for the write
-      # probe. Both are idempotent and re-applied after every clone.
+      write -X PATCH "$V/api/latest/viewpolicies/$POLICY_ID/" -H 'Content-Type: application/json' \
+        -d "{\"nfs_read_write\":[\"{{ lab_vast_nat_pool_cidr }}\"],\"nfs_root_squash\":[],\"nfs_no_squash\":[\"{{ lab_vast_nat_pool_cidr }}\"]}"
+      echo "policy access ok"
+
+      # "NFS" in a view's protocols is NFSv3 only; NFSv4.1/4.2 is "NFS4". An
+      # NFSv4 export also needs NFSv4 on every view above it, including the
+      # default tenant's `/`, or a 4.1 mount fails with "Operation not
+      # permitted". Clients reach that `/` only as the NFSv4 pseudo-root: it
+      # belongs to the default tenant, so its data stays out of their reach.
+      ROOT_VID=$(api "$V/api/latest/views/" | python3 -c '
+      import json,sys
+      m=[x for x in json.load(sys.stdin) if x["path"]=="/" and "NFS4" not in x["protocols"]]
+      print(m[0]["id"] if m else 0)')
+      if [ "$ROOT_VID" != 0 ]; then
+        write -X PATCH "$V/api/latest/views/$ROOT_VID/" -H 'Content-Type: application/json' \
+          -d '{"protocols":["NFS","NFS4"]}'
+        echo "root view NFS4 enabled"
+      fi
+
+      # The export belongs to the lab tenant: the VIP pool is the lab tenant's,
+      # so VAST serves the SNAT clients only views of that tenant. A view needs
+      # an existing path; create the directory first (ALREADY_EXISTS is fine).
+      api -X POST "$V/api/latest/folders/create_folder/" -H 'Content-Type: application/json' \
+        -d "{\"path\":\"{{ lab_vast_view_path }}\",\"tenant_id\":$TENANT_ID,\"create_dir_mode\":511}" \
+        -o /tmp/lab-vast-api.out -w 'folder create %{http_code}\n'
+      grep -q -e '"OK"' -e ALREADY_EXISTS /tmp/lab-vast-api.out \
+        || { echo "folder create failed: $(cat /tmp/lab-vast-api.out)" >&2; exit 1; }
+
       VID=$(api "$V/api/latest/views/" | python3 -c '
       import json,sys
-      d=json.load(sys.stdin)
-      m=[x for x in d if x["path"]=="{{ lab_vast_view_path }}"]
+      m=[x for x in json.load(sys.stdin) if x["path"]=="{{ lab_vast_view_path }}" and x["tenant_id"]=='"$TENANT_ID"']
       print(m[0]["id"] if m else 0)')
-      if [ "$VID" != 0 ]; then
-        api -X PUT "$V/api/latest/views/$VID/" -H 'Content-Type: application/json' \
-          -d "{\"path\":\"{{ lab_vast_view_path }}\",\"policy_id\":$POLICY_ID,\"logical_capacity\":{{ lab_vast_view_capacity_bytes }},\"physical_capacity\":{{ lab_vast_view_capacity_bytes }}}" \
-          -o /dev/null -w 'view capacity %{http_code}\n'
+      if [ "$VID" = 0 ]; then
+        write -X POST "$V/api/latest/views/" -H 'Content-Type: application/json' \
+          -d "{\"name\":\"lab-storage\",\"path\":\"{{ lab_vast_view_path }}\",\"policy_id\":$POLICY_ID,\"tenant_id\":$TENANT_ID,\"protocols\":[\"NFS\",\"NFS4\"]}"
+        echo "view create 201"
+      else
+        write -X PATCH "$V/api/latest/views/$VID/" -H 'Content-Type: application/json' \
+          -d "{\"policy_id\":$POLICY_ID,\"protocols\":[\"NFS\",\"NFS4\"]}"
+        echo "view ok"
       fi
-      api -X PATCH "$V/api/latest/viewpolicies/$POLICY_ID/" -H 'Content-Type: application/json' \
-        -d "{\"nfs_read_write\":[\"{{ lab_vast_nat_pool_cidr }}\"],\"nfs_root_squash\":[],\"nfs_no_squash\":[\"{{ lab_vast_nat_pool_cidr }}\"]}" \
-        -o /dev/null -w 'policy access %{http_code}\n'
 
       api "$V/api/latest/vippools/" | python3 -c '
       import json,sys

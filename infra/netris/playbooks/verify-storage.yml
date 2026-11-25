@@ -138,3 +138,34 @@
               - _lab_vast_verify_clientlog.stdout | trim == 'active'
             fail_msg: "osac-vast-clients is not active"
 
+        # The tenants mount with NFSv4.1: the export must be a lab-tenant view
+        # with NFS4, and every view above it (the root view) must have NFS4 too.
+        - name: Read the VAST tenant export
+          ansible.builtin.command:
+            argv:
+              - ssh
+              - -i
+              - "{{ lab_vast_ssh_key }}"
+              - -o
+              - StrictHostKeyChecking=no
+              - -o
+              - UserKnownHostsFile=/dev/null
+              - "centos@{{ lab_vast_mgmt_ip }}"
+              - >-
+                curl -sk -u admin:{{ lab_vast_admin_password }}
+                https://{{ lab_vast_mgmt_ip }}/api/latest/views/
+                | python3 -c 'import json,sys;
+                v=json.load(sys.stdin);
+                e=[x for x in v if x["path"]=="{{ lab_vast_view_path }}" and x["tenant_name"]=="lab" and "NFS4" in x["protocols"]];
+                r=[x for x in v if x["path"]=="/" and "NFS4" not in x["protocols"]];
+                print("OK" if e and not r else "export=%d root_without_nfs4=%d" % (len(e), len(r)))'
+          register: _lab_vast_verify_export
+          changed_when: false
+
+        - name: Require an NFSv4 lab-tenant export
+          ansible.builtin.assert:
+            that:
+              - _lab_vast_verify_export.stdout | trim == 'OK'
+            fail_msg: >-
+              VAST export {{ lab_vast_view_path }} is not an NFSv4 view of the lab
+              tenant under NFSv4-enabled parents: {{ _lab_vast_verify_export.stdout | trim }}

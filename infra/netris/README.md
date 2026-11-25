@@ -707,7 +707,7 @@ so scheduled and PR CI never deploys it. `deploy-storage` writes the endpoint to
 
 ```
 OSAC_STORAGE_NFS_SERVER=192.168.124.20
-OSAC_STORAGE_NFS_EXPORT=/
+OSAC_STORAGE_NFS_EXPORT=/lab-storage
 OSAC_STORAGE_SSH_HOST=centos@192.168.16.60
 OSAC_STORAGE_SSH_IDENTITY=/root/.ssh/lab-vast
 OSAC_STORAGE_LOG_PATH=/var/log/osac-vast-clients.log
@@ -780,9 +780,16 @@ https://<lab-host>:9445/     # self-signed; admin / 123456
   `192.168.124.0/24` and the lab NAT pool, or VIP replies never leave the guest.
 - The data bridge can come up with no carrier after a boot; the role re-attaches
   the domain's tap to `br-vast`.
-- The only appliance export today is the default `root` view at `/`; it is not
-  writable by the SNAT clients yet, so the storage-over-SNAT write probe is the
-  one open item. Mount over the NATGateway itself works.
+- The tenants' export is `/lab-storage`, a view of the `lab` tenant. VAST
+  serves a client only views of the tenant its VIP pool belongs to, and
+  `lab-pool` is the `lab` tenant's, so the appliance's default `/` view (default
+  tenant) is mounted as an empty NFSv4 pseudo-root with no data access.
+- A view's `NFS` protocol is NFSv3 only; NFSv4.1/4.2 is `NFS4`. An NFSv4 export
+  also needs `NFS4` on every view above it, including the default `/` view, or a
+  `vers=4.1` mount fails with `Operation not permitted`. The role enables both,
+  and `verify-storage` checks them.
+- Mount from a tenant guest:
+  `mount -t nfs -o vers=4.1,noresvport 192.168.124.20:/lab-storage /mnt`.
 - Sequential use only: one clone at a time (same MACs, addresses, VIPs, UUID).
 
 ## How deploy-ocp Works
