@@ -62,6 +62,7 @@
           # but the hosts entry may resolve to the management IP instead.
           python3 - <<'PY'
           import json, os
+          os.makedirs("/etc/docker", exist_ok=True)
           p = "/etc/docker/daemon.json"
           d = json.load(open(p)) if os.path.exists(p) else {}
           regs = set(d.get("insecure-registries", [])) | {
