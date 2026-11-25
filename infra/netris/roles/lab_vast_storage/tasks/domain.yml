@@ -91,6 +91,24 @@
     argv: [nmcli, con, up, "{{ lab_vast_bridge }}"]
   changed_when: false
 
+- name: Read the firewalld state
+  ansible.builtin.command: systemctl is-active firewalld
+  register: _lab_vast_firewalld
+  changed_when: false
+  failed_when: false
+
+# The data bridge is lab-internal. firewalld's public zone rejects forwarded
+# traffic, and the SNAT side (br-public) is trusted, so the tenant path would be
+# dropped unless this bridge is trusted too.
+- name: Trust the VAST data bridge in firewalld
+  when: _lab_vast_firewalld.stdout | trim == 'active'
+  ansible.posix.firewalld:
+    zone: trusted
+    interface: "{{ lab_vast_bridge }}"
+    permanent: true
+    immediate: true
+    state: enabled
+
 - name: Render the VAST domain definition
   ansible.builtin.template:
     src: domain.xml.j2
