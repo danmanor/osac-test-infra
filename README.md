@@ -112,6 +112,7 @@ The test targets run pytest from the OSAC mono-repo checkout. Set
 | `test-maas` | Dedicated OSAC path, when it exists | MaaS tests; fails when the path is absent |
 | `test-caas_networking`, `test-maas_networking` | Dedicated OSAC paths, when they exist | CaaS and MaaS networking tests; fail when the path is absent |
 | `test-storage` | `tests/e2e/storage/` | Storage E2E tests |
+| `test-storage-nat` | `tests/e2e/networking/storage/` | Storage over tenant SNAT (VM, CaaS PVC, BMaaS host) |
 | `test-metering` | `tests/e2e/` | Tests marked `metering` |
 | `test-references` | `tests/e2e/references/` | Cross-resource reference tests |
 

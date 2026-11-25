@@ -654,6 +654,137 @@ Then browse to `https://osac-ui-osac-devel.apps.ocp-sno.osac.local:9444` (accept
 
 `ingress_forward_alias_deployments` remains a list of deployment names in `osac_namespace`. Additional namespace-aware targets are configured with `ingress_forward_extra_alias_deployments`, a list of mappings with `namespace` and `deployment` keys. Its default targets `osac-infra/openbao`; absent deployments are skipped. Set it to `[]` when no additional targets are wanted. The OpenBao entry also sets `keycloak_issuer_container: bootstrap`, which updates that container's `KEYCLOAK_ISSUER_URL` together with the host alias in one pod-template patch. This keeps OIDC discovery coherent when the bootstrap sidecar runs again after the rollout, without changing CA trust or the initial Helm installation order. A target may name other issuer variables in `keycloak_issuer_env` (default `[KEYCLOAK_ISSUER_URL]`). The BMF operator entry sets `OSAC_INSTALLATION_API_ISSUER_URL` and `OSAC_SECRET_API_ISSUER_URL` on its `manager` container: BMF compares the advertised issuer with them at every start and exits on a mismatch, so a BMF restart after the forward would otherwise crash-loop. Alias reconciliation, rollout waiting and verification use the same combined target list.
 
+## Lab storage endpoint (VAST)
+
+The lab's storage-over-SNAT tests run against a VAST 5.4 loopback appliance. It
+is the only lab storage backend; the earlier vendor-neutral NFS endpoint was
+retired. This is a lab fixture: one VM on the lab host, not a supported
+deployment.
+
+### What runs
+
+One libvirt VM (`vast-5-4`) on the lab host:
+
+| Item | Value |
+|---|---|
+| Sizing | 32 vCPU, 128 GiB, 1 TiB virtio disk (`lab_vast_vcpu` and friends) |
+| Management / API / UI | `192.168.16.60` on `br-mgmt` |
+| Data | `192.168.124.11` on the lab's own `br-vast` bridge (`192.168.124.0/24`) |
+| VIP pool | `192.168.124.20`–`192.168.124.23`, gateway `.1` |
+| Console creds | `centos` / `centos` |
+| Appliance API/UI creds | `admin` / `123456` |
+
+Inside the guest: `registry` (local image cache), `vast_vms` and `mcvms`
+(management planes), and four platform containers
+`vast_platform_11.0.0.1-4100…4400` that simulate two CNodes and two DNodes.
+
+### Prerequisites
+
+1. The appliance image is a one-time lab artifact, not in git:
+   `/var/lib/libvirt/images/vast/vast_5_4.qcow2`, sha256
+   `be2cbdab375760873aa50d2e6a8aca16cf61bc2f4453605b15b4a35ed0186dd7`
+   (`qemu-img info` 1 TiB virtual, ~23 GiB on disk). Copy it from a developer
+   machine once.
+2. The lab host needs at least `lab_vast_min_free_mem_mb` (64 GiB) free, and the
+   spare BMaaS host `hgx-pod00-su0-h03` must stay shut off; the role refuses to
+   boot otherwise.
+3. The lab OSAC install should already exclude `192.168.124.0/24` from tenant
+   networks (`netris_storage_endpoint_enabled=true` before `prep-osac`).
+
+### Targets
+
+| Target | What it does |
+|---|---|
+| `make deploy-storage` | Full appliance deploy, or a clone when a golden image exists |
+| `make verify-storage` | Cluster ONLINE, management DB ready, client observation active |
+| `make destroy-storage` | Undefine the domain, remove the deploy overlay and marker (base and golden stay) |
+| `make capture-golden` | Re-check green, stop the VM, flatten the overlay into the golden image |
+| `make vast-ui-forward` | (Re)install the browser forward on `:9445` |
+
+The backend is opt-in: `netris_storage_endpoint_enabled` defaults to `false`,
+so scheduled and PR CI never deploys it. `deploy-storage` writes the endpoint to
+`.env.infra` through `deploy-osac`:
+
+```
+OSAC_STORAGE_NFS_SERVER=192.168.124.20
+OSAC_STORAGE_NFS_EXPORT=/
+OSAC_STORAGE_SSH_HOST=centos@192.168.16.60
+OSAC_STORAGE_SSH_IDENTITY=/root/.ssh/lab-vast
+OSAC_STORAGE_LOG_PATH=/var/log/osac-vast-clients.log
+```
+
+### Full install
+
+`make deploy-storage` with no golden image runs the real install (~2.5 h on this
+host) and is idempotent:
+
+1. Verify the base image and create a copy-on-write deploy overlay.
+2. Boot the overlay once on IDE, rebuild its initramfs inside the guest (the
+   shipped VMware initramfs has no `virtio_blk`), then define it on virtio.
+3. Install docker in the guest (lab DNS, `ip_resolve=4`, insecure local
+   registry) and run `/home/centos/install.sh` as `centos`.
+4. Repair the management plane: the registry hostname (`None` in the image),
+   the empty nginx `listen` block, supervisor services, and the VMS `ip1`.
+5. Create the loopback cluster and wait for `ONLINE`, then for the
+   management-DB copy and replication (the VMS rejects writes until then).
+6. Create the lab tenant, the shared VIP pool, the view policy, the exported
+   view, align the VIP policy routes with the data NIC, and start the client
+   observation.
+
+The cluster's 1 TiB loopback format and the DB copy are CPU-bound, which is why
+32 vCPU is the default on this host.
+
+### Golden image: fast redeploys
+
+After `make verify-storage` is green:
+
+```bash
+make capture-golden          # stops the VM, ~5 min, 114 GB artifact
+make destroy-storage         # removes only the deploy overlay
+make deploy-storage          # clone: ~6 min to verify-storage green
+```
+
+The clone is a copy-on-write overlay backed by
+`/var/lib/libvirt/images/vast/vast_5_4-golden.qcow2`, with a `.meta` file
+(`build`, `uuid`, cluster, captured objects). It skips the install, the format
+and the DB copy, starts the containers (the VMS containers are removed on
+shutdown and are recreated with `vman start --force`), and reconciles the
+captured ONLINE cluster. It **keeps the captured cluster identity** (GUID, SSH
+host keys, DB) — intended for one sequential lab VM.
+
+- Force a full install: `make destroy-storage && make deploy-storage
+  EXTRA_VARS='lab_vast_use_golden=false'`.
+- Against an existing golden-backed overlay the flag is refused unless you
+  destroy first (backing mismatch), by design.
+- A stale golden (new build) or a missing/corrupt `.meta` is refused; recapture
+  with `make capture-golden`.
+
+### Browser access
+
+The VAST UI is published on the lab host like the OCP ingress (`:9444`) and the
+Netris controller (`:9443`): a `vast-ui-forward.service` runs
+`socat TCP-LISTEN:9445,fork TCP:192.168.16.60:443`, and firewalld opens 9445.
+
+```
+https://<lab-host>:9445/     # self-signed; admin / 123456
+```
+
+### Operational notes
+
+- **Never sync while an `ansible-playbook` against the appliance is running.**
+  Templates and included files are read at run time.
+- The guest's VMS containers (`vast_vms`, `mcvms`) are removed on shutdown;
+  only `registry` and the platform envs have restart policies.
+- VAST puts every VIP in a policy-routing table whose default route points at a
+  dummy interface; `vip_routes.yml` repoints each table at `eth1` for
+  `192.168.124.0/24` and the lab NAT pool, or VIP replies never leave the guest.
+- The data bridge can come up with no carrier after a boot; the role re-attaches
+  the domain's tap to `br-vast`.
+- The only appliance export today is the default `root` view at `/`; it is not
+  writable by the SNAT clients yet, so the storage-over-SNAT write probe is the
+  one open item. Mount over the NATGateway itself works.
+- Sequential use only: one clone at a time (same MACs, addresses, VIPs, UUID).
+
 ## How deploy-ocp Works
 
 `make deploy-ocp` restores OCP SNO from the OCP-only `sno-4-22` VM snapshot. It uses a golden qcow2 disk image (cached during `make setup-infra`) and regenerates the cluster's identity (certificates, hostname, IP, domain) using [recert](https://github.com/rh-ecosystem-edge/recert). OSAC is installed separately by `make deploy-osac`.
