@@ -37,7 +37,11 @@
                 'virtualNetworkIPv4CIDR': netris_tenant_network_cidr,
                 'subnetIPv4CIDR': netris_tenant_subnet_cidr}}
             }},
-          'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}},
+          'operator': {'aap': {'tokenSecret': {'name': 'osac-aap-api-token', 'key': 'token'}}}
+                      | combine({'vendorControllers': {
+                          'lvms': 'none',
+                          'vast': netris_storage_vast_controller_endpoint}}
+                                if netris_storage_endpoint_enabled | default(false) | bool else {}),
           'aap': {'instanceGroups': {'clusterFulfillment': {'enabled': true, 'config': {
               'EXTERNAL_ACCESS_BASE_DOMAIN': ocp_base_domain,
               'EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS': ocp_base_domain,
