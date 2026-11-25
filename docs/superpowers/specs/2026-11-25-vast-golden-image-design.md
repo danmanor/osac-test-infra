@@ -30,11 +30,16 @@ clone of it, so a redeploy is minutes.
   DB ready, objects created, client log active). Capturing earlier would leave
   the expensive format and DB copy in every deploy.
 - **Identity:** a clone keeps the captured cluster identity (GUID, SSH host
-  keys, DB, lab objects). Accepted for one sequential lab VM; documented, and
-  opt-out via `lab_vast_use_golden=false` or deleting the golden file.
-- **Capture:** a one-time lab operation, not part of the deploy path. The
-  optional `make capture-golden` playbook only exists so the step is repeatable
-  and documented; it stops the VM for a consistent capture.
+  keys, DB, lab objects) and boots with the captured libvirt domain UUID, the
+  one the cluster was created under (recorded in `.meta`). Accepted for one
+  sequential lab VM; opt-out is `destroy-storage` then
+  `lab_vast_use_golden=false`, or deleting the golden file.
+- **Capture:** a one-time lab operation, not part of the deploy path, done
+  with `make capture-golden`. It re-checks green on the running appliance,
+  shuts it down gracefully (never forced off), and writes the image and its
+  `.meta` together. Capture happens before per-tenant VAST objects
+  (`configure-vast-tenants`) are first created, and only after a cold boot of
+  the same disk has been rehearsed green.
 - **Mechanism:** flatten the green overlay once with `qemu-img convert` into a
   standalone golden qcow2 (uncompressed by default; `-c` only when the measured
   size requires it, since compressed backing makes every post-clone first read
@@ -50,18 +55,25 @@ Artifacts under `/var/lib/libvirt/images/vast/`:
 |---|---|
 | `vast_5_4.qcow2` | pristine base (checksum-pinned, never modified) |
 | `vast_5_4-golden.qcow2` | captured green appliance (optional, lab-local) |
+| `vast_5_4-golden.qcow2.meta` | required with the golden: `build=`, `uuid=`, plus capture facts |
 | `vast_5_4-lab.qcow2` | per-deploy overlay; deleted by `destroy-storage` |
 | `vast_5_4-lab.qcow2.prepared` | marker: overlay needs no preparation |
 
-- `image.yml`: if `lab_vast_use_golden` and the golden exists, the new overlay
-  is backed by the golden and the prepared marker is written, so `prepare.yml`
-  (IDE boot + dracut) is skipped.
-- `install.yml`: its completeness check (`vman.sh` **and** the `vast_vms`
-  container) passes on a golden clone, so `install.sh` is skipped.
+- `image.yml`: if `lab_vast_use_golden` and the golden exists, it requires the
+  `.meta` (matching `build=`, a `uuid=`), does not read the base image, backs
+  the new overlay with the golden and writes the prepared marker, so
+  `prepare.yml` (IDE boot + dracut) is skipped. On every run it asserts that an
+  existing overlay is backed by the selected image.
+- `domain.yml`: a new domain is defined with the captured UUID.
+- `install.yml`: the completeness probe waits for dockerd in the guest, then
+  checks `vman.sh` **and** the `vast_vms` container, so `install.sh` is skipped.
+  A clone that does not look installed fails instead of reinstalling.
 - `cluster.yml`: starts `registry`, `vast_vms` and `mcvms` (containers do not
-  autostart), repairs the management plane, finds the existing ONLINE cluster
-  and waits for the DB to report ready. No create, no format, no DB copy.
+  autostart) and requires `vast_vms` running, repairs the management plane,
+  finds the existing ONLINE cluster and waits for the DB to report ready. On a
+  clone it never deletes a `FAILED` cluster or creates one; it fails instead.
 - `objects.yml` is idempotent by name; the lab objects already exist.
+- `clientlog.yml`: a new overlay starts with an empty client log.
 - `destroy-storage` removes only the deploy overlay and marker; the golden
   stays.
 
@@ -84,9 +96,11 @@ Artifacts under `/var/lib/libvirt/images/vast/`:
 | Two clones running simultaneously collide on `192.168.124.11`/VIP | one domain name and one data bridge; documented as sequential-only |
 | A clone inherits test tenants/views from the captured state | capture after a clean verify; tests use unique names; the lab view admits the pool CIDR |
 | Golden drifts from the base image checksum | golden is standalone; base is only needed for a fresh install |
-| Golden drifts from `lab_vast_build` | `.meta` records the build; the role asserts a match and warns when the meta is missing |
+| Golden drifts from `lab_vast_build` | `.meta` records the build; the role refuses a mismatch or a missing `.meta` |
+| A clone comes back with its cluster `FAILED` or missing | the role refuses to delete or create on a clone; the operator decides |
+| Captured per-tenant objects carry stale NAT allowlists | capture before `configure-vast-tenants` first runs; re-run it after every clone deploy |
 | Capture leaves the VM stopped | the playbook says to run `destroy-storage` then `deploy-storage` |
-| Disk growth (golden + overlay) | measured before capture (`du` + `qemu-img info`); uncompressed flatten by default, `-c` only if the measured space requires it |
+| Disk growth (golden + overlay) | measured before capture (`qemu-img measure`); uncompressed flatten by default, `-c` only if the measured space requires it |
 | The suite passes on evidence inherited from the golden | the client observation log is truncated when a deploy creates a new overlay, and the suite matches only lines after that baseline |
 
 ## Verification
@@ -95,8 +109,10 @@ Artifacts under `/var/lib/libvirt/images/vast/`:
   ready, no create/format/copy. This is the go/no-go before any capture.
 - Time `deploy-storage` + `verify-storage` on a clone; target < 15 min.
 - `verify-storage` green (cluster ONLINE, DB ready, client log active).
-- Run `test_storage_nat.py -k fr5_01` against the clone, asserting the client-log
-  line postdates the deploy.
+- Prove the refusals on the lab: opt-out without a destroy fails before the
+  domain is touched; a warm re-run does not reset the client log.
+- Run the VM-path storage cases against the clone, with the suite reading only
+  client-log lines written after its own mount.
 
 ## Open items (resolved during validation)
 
