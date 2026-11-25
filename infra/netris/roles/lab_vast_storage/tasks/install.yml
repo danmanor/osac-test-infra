@@ -80,7 +80,8 @@
           systemctl restart docker
           usermod -aG docker centos
           if ! docker ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q vast_platform; then
-            nohup sg docker -c 'cd /home/centos && ./install.sh' \
+            : > /home/centos/vast-install.log
+            nohup runuser -u centos -- bash -lc 'cd /home/centos && ./install.sh' \
               > /home/centos/vast-install.log 2>&1 < /dev/null &
             echo $! > /home/centos/vast-install.pid
           fi
@@ -99,7 +100,7 @@
           - -o
           - ConnectTimeout=10
           - "centos@{{ lab_vast_mgmt_ip }}"
-          - '! pgrep -f "^/bin/bash ./install.sh$" >/dev/null'
+          - grep -q 'finished cluster creation' /home/centos/vast-install.log
       register: _lab_vast_install_done
       until: _lab_vast_install_done.rc == 0
       retries: 240
