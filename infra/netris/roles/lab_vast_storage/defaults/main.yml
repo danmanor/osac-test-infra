@@ -45,6 +45,14 @@ lab_vast_autostart: false
 lab_vast_mgmt_bridge: "br-mgmt"
 lab_vast_bridge: "br-vast"
 lab_vast_bridge_ip: "192.168.124.1/24"
+# The bridge the tenants' traffic arrives on (SoftGate SNAT, and any tenant
+# VRF that routes to the data subnet without a NATGateway).
+lab_vast_public_bridge: "br-public"
+# The tenants' SNAT slice: the VAST clients, and the only source allowed to
+# cross the host into the data bridge.
+lab_vast_nat_slice_cidr: "198.51.100.24/29"
+lab_vast_nat_slice_start: "198.51.100.24"
+lab_vast_nat_slice_end: "198.51.100.31"
 lab_vast_data_prefix: 24
 # The appliance's own data subnet, as VAST client IPs: it reads the export back
 # for the suite's server-side check, read-only, over the VIP.
