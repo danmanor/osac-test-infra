@@ -13,7 +13,7 @@
       Wants=network-online.target
 
       [Service]
-      ExecStart=/usr/bin/socat TCP-LISTEN:{{ lab_vast_ui_port }},fork,reuseaddr TCP:{{ lab_vast_mgmt_ip }}:443
+      ExecStart=/usr/bin/socat TCP6-LISTEN:{{ lab_vast_ui_port }},fork,reuseaddr,ipv6only=0 TCP:{{ lab_vast_mgmt_ip }}:443
       Restart=always
       RestartSec=2
 
