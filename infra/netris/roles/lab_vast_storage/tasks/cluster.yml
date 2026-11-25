@@ -33,7 +33,10 @@
       for c in registry vast_vms mcvms; do
         docker start "$c" >/dev/null 2>&1 || true
       done
-      sleep 5
+      for _ in $(seq 60); do
+        docker ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -qx vast_vms && break
+        sleep 5
+      done
       docker ps -a --format '{{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.State{{ '}}' }}'
   register: _lab_vast_containers
   changed_when: false
