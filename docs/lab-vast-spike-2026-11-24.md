@@ -129,3 +129,32 @@ _(filled by Task 5)_
 - Clean sequence that works: `start --with-db-cleanup` and wait for it to exit,
   create the cluster, wait for ONLINE, wait for the DB copy and streaming, then
   create objects. The role implements this order.
+
+## Time budget (for the post-run brainstorm)
+
+Measured on this host, one clean deploy:
+
+| Phase | 16 vCPU | 32 vCPU | Notes |
+|---|---|---|---|
+| Image copy from a laptop | ~1.5 h | — | one-time; 23 GiB over ~4 MB/s |
+| Offline overlay prep + IDE boot | ~6 min | ~6 min | one-time per overlay |
+| `install.sh` (unpack + image import + bootstrap) | ~40 min | ~40 min | docker install included |
+| Cluster ACTIVATING (1 TiB loopback format) | ~66 min | ~52 min (CNODE 29) | CPU-bound, not disk-bound |
+| Management-DB copy + replication catch-up | hours at 16 vCPU | ~35 min | CPU-bound NFS path |
+
+Candidate levers, strongest first:
+
+1. **Golden overlay snapshot** (the same idea as the lab's OCP SNO snapshot):
+   deploy once, let it reach ONLINE with the DB copied, then keep that overlay
+   as a golden image and give each deployment a copy-on-write overlay from it.
+   That removes install + format + DB copy from every subsequent deploy, which
+   is ~2 h of the current ~2.5 h.
+2. Pre-install docker (and keep the registry populated) in the golden image so
+   `install.sh`'s unpack/import is skipped.
+3. If a fresh cluster identity is required per deploy, snapshot **after
+   install but before `cluster create`**; every deploy then pays only the
+   ACTIVATING cost, not the installer.
+4. Reduce the loopback footprint (`loopback_conf.yml` dboxes: fewer/smaller
+   SSD/NVRAM drives) if the platform accepts it — directly cuts the format.
+5. Keep 32 vCPU (done) and add an iothread/multiqueue if the block path ever
+   becomes the limiter.
