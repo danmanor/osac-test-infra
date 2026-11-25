@@ -1,5 +1,8 @@
 <domain type='kvm'>
   <name>{{ lab_vast_domain }}</name>
+{% if _lab_vast_domain_uuid | default('') | length > 0 %}
+  <uuid>{{ _lab_vast_domain_uuid }}</uuid>
+{% endif %}
   <memory unit='MiB'>{{ lab_vast_memory_mib }}</memory>
   <vcpu>{{ lab_vast_vcpu }}</vcpu>
   <os>

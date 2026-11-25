@@ -20,10 +20,22 @@
       - "centos@{{ lab_vast_mgmt_ip }}"
       - sudo bash -s
     stdin: |
+      for _ in $(seq 60); do systemctl is-active --quiet docker && break; sleep 5; done
       for c in registry vast_vms mcvms; do
         docker start "$c" >/dev/null 2>&1 || true
       done
+      sleep 5
+      docker ps -a --format '{{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.State{{ '}}' }}'
+  register: _lab_vast_containers
   changed_when: false
+
+# A wrong container name or a dead dockerd must fail here, not after the
+# two-hour ONLINE wait below.
+- name: Require the VMS container to be running
+  ansible.builtin.assert:
+    that:
+      - "'vast_vms running' in _lab_vast_containers.stdout_lines"
+    fail_msg: "vast_vms is not running. Containers: {{ _lab_vast_containers.stdout_lines }}"
 
 - name: Ensure the VAST management API is reachable
   ansible.builtin.command:
@@ -122,8 +134,24 @@
   ansible.builtin.set_fact:
     _lab_vast_clusters: "{{ _lab_vast_clusters_raw.stdout | from_json }}"
 
+# On a golden clone the cluster and its formatted loopback drives are the
+# captured state. Deleting or re-creating it would rebuild over that data, so a
+# clone fails instead and the operator decides.
+- name: Refuse to delete or create a cluster on a golden clone
+  ansible.builtin.assert:
+    that:
+      - _lab_vast_clusters | selectattr('state', 'in', ['FAILED']) | list | length == 0
+      - _lab_vast_clusters | length > 0
+    fail_msg: >-
+      The golden clone reports clusters {{ _lab_vast_clusters | map(attribute='state') | list }}.
+      A clone must find its captured cluster; it does not delete or create one.
+      Inspect the guest, or deploy with lab_vast_use_golden=false after
+      `make destroy-storage`.
+  when: _lab_vast_from_golden | bool
+
 - name: Delete a leftover cluster that failed
   when:
+    - not (_lab_vast_from_golden | bool)
     - _lab_vast_clusters | selectattr('state', 'in', ['FAILED']) | list | length > 0
   ansible.builtin.command:
     argv:
@@ -142,6 +170,7 @@
 
 - name: Create the loopback cluster when none exists
   when:
+    - not (_lab_vast_from_golden | bool)
     - _lab_vast_clusters | rejectattr('state', 'in', ['FAILED']) | list | length == 0
   ansible.builtin.command:
     argv:

@@ -27,6 +27,12 @@ lab_vast_prepared_marker: "{{ lab_vast_overlay }}.prepared"
 # cluster identity.
 lab_vast_golden_image: "{{ lab_vast_image_dir }}/vast_5_4-golden.qcow2"
 lab_vast_use_golden: true
+# Compressed backing makes every first read after a clone decompress, and
+# `qemu-img convert -c` is single-threaded. Only enable when space requires it.
+lab_vast_golden_compress: false
+# A guest shutdown that does not finish is not a consistent capture; fail
+# instead of forcing the domain off.
+lab_vast_shutdown_timeout_s: 900
 lab_vast_nbd_device: "/dev/nbd0"
 lab_vast_root_partition: "/dev/nbd0p3"
 lab_vast_mount: "/mnt/vastroot"

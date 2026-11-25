@@ -41,6 +41,30 @@
       systemctl restart osac-vast-clients.service
       systemctl is-active osac-vast-clients.service
 
+# A golden clone inherits the captured run's tcpdump lines, and the suite reads
+# its NAT-address evidence from this log. Start every new overlay empty; never
+# truncate on a re-run against the same overlay.
+- name: Reset the VAST client observation log for a new overlay
+  when: _lab_vast_fresh_overlay | default(false) | bool
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - sudo bash -s
+    stdin: |
+      set -e
+      : > {{ lab_vast_client_log }}
+      systemctl restart osac-vast-clients.service
+  changed_when: true
+
 - name: Require the client observation to be running
   ansible.builtin.command:
     argv:

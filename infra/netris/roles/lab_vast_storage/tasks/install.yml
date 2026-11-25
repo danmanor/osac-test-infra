@@ -15,7 +15,11 @@
     argv: [ssh-keygen, -t, ed25519, -N, "", -f, "{{ lab_vast_ssh_key }}"]
     creates: "{{ lab_vast_ssh_key }}"
 
-- name: Check whether the VAST install already completed
+# A golden clone has vman.sh and the containers, but dockerd may still be
+# starting when SSH answers. Reading `docker ps -a` too early looks like an
+# incomplete install and re-runs install.sh (40 min) against a live cluster,
+# so the probe waits for dockerd in the guest before it decides.
+- name: Probe the VAST install sentinels
   ansible.builtin.command:
     argv:
       - sshpass
@@ -29,15 +33,37 @@
       - -o
       - ConnectTimeout=10
       - "centos@{{ lab_vast_mgmt_ip }}"
-      - >-
-        test -x /vast/deploy/vman.sh &&
-        sudo docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -qx vast_vms
-  register: _lab_vast_installed
+      - sudo bash -s
+    stdin: |
+      [ -x /vast/deploy/vman.sh ] || { echo INCOMPLETE; exit 0; }
+      for _ in $(seq 60); do
+        if systemctl is-active --quiet docker; then
+          if docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -qx vast_vms; then
+            echo COMPLETE
+          else
+            echo INCOMPLETE
+          fi
+          exit 0
+        fi
+        sleep 5
+      done
+      echo INCOMPLETE
+  register: _lab_vast_install_probe
   changed_when: false
-  failed_when: false
+
+- name: Refuse to reinstall over a golden clone
+  ansible.builtin.assert:
+    that:
+      - "'COMPLETE' in _lab_vast_install_probe.stdout_lines"
+    fail_msg: >-
+      This overlay is a golden clone but the guest does not look installed
+      (docker inactive after 5 min, or no vast_vms container). Running
+      install.sh here would rebuild over the captured cluster; inspect the guest
+      or deploy with lab_vast_use_golden=false after `make destroy-storage`.
+  when: _lab_vast_from_golden | bool
 
 - name: Install docker and start the VAST install
-  when: _lab_vast_installed.rc != 0
+  when: "'COMPLETE' not in _lab_vast_install_probe.stdout_lines"
   block:
     - name: Install docker and launch the VAST installer
       ansible.builtin.command:
