@@ -98,7 +98,7 @@
           - -o
           - ConnectTimeout=10
           - "centos@{{ lab_vast_mgmt_ip }}"
-          - '! pgrep -f "/home/centos/install.sh|bash ./install.sh" >/dev/null'
+          - '! pgrep -f "^/bin/bash ./install.sh$" >/dev/null'
       register: _lab_vast_install_done
       until: _lab_vast_install_done.rc == 0
       retries: 240
