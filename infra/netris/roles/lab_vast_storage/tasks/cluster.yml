@@ -123,6 +123,35 @@
   delay: 5
   changed_when: false
 
+# A booting clone reports its captured cluster FAILED while the CNodes go
+# UNKNOWN -> FAILED -> ACTIVATING -> ACTIVE (about 3 minutes here). Give it
+# that time before the guard below reads the state; one that never comes back
+# still fails the guard.
+- name: Wait for the captured cluster of a golden clone to activate
+  when: _lab_vast_from_golden | bool
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - "{{ lab_vast_ssh_key }}"
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - "centos@{{ lab_vast_mgmt_ip }}"
+      - >-
+        curl -sk -u admin:{{ lab_vast_admin_password }}
+        https://{{ lab_vast_mgmt_ip }}/api/clusters/
+        | python3 -c 'import json,sys; print("ONLINE" if any(c.get("state")=="ONLINE" for c in json.load(sys.stdin)) else "PENDING")'
+  register: _lab_vast_clone_cluster
+  until: _lab_vast_clone_cluster.stdout | trim == 'ONLINE'
+  retries: 40
+  delay: 15
+  changed_when: false
+  failed_when: false
+
 - name: Read the VAST clusters
   ansible.builtin.command:
     argv:
